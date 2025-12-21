@@ -383,10 +383,10 @@ proxy-groups:
       - ss1
       - ss2
       - vmess1
-    # tolerance: 150 # the latency difference in milliseconds to trigger a switch
-    # lazy: true # when true, tests only run when this group is used
+    # tolerance: 150 # The latency difference in milliseconds to trigger a switch
+    # lazy: true # When true, tests only run when this group is used
     url: 'http://www.gstatic.com/generate_204'
-    interval: 300 # test interval in seconds
+    interval: 300 # Test interval in seconds
 
   # fallback selects an available policy by priority. The availability is tested by accessing an URL, just like an auto url-test group.
   - name: "fallback-auto"
