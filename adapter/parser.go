@@ -74,6 +74,13 @@ func ParseProxy(mapping map[string]any) (C.Proxy, error) {
 			break
 		}
 		proxy, err = outbound.NewTrojan(*trojanOption)
+	case "ssh":
+		sshOption := &outbound.SshOption{}
+		err = decoder.Decode(mapping, sshOption)
+		if err != nil {
+			break
+		}
+		proxy, err = outbound.NewSsh(*sshOption)
 	default:
 		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}

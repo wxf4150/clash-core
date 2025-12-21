@@ -346,6 +346,71 @@ Clash has built support for the popular protocol Trojan:
 
 :::
 
+### SSH
+
+Clash supports SSH as a proxy protocol. SSH proxy uses SSH tunneling to forward traffic through an SSH server. It supports both password and private key authentication, and can automatically load configuration from `~/.ssh/config`.
+
+::: tip
+SSH proxy does not support UDP traffic. Only TCP connections are supported through SSH tunneling.
+:::
+
+::: code-group
+
+```yaml [password]
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: server
+  port: 22
+  username: user
+  password: "password"
+```
+
+```yaml [private-key]
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa
+```
+
+```yaml [ssh-config]
+# This will load configuration from ~/.ssh/config
+# matching the server hostname
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: myhost  # matches Host entry in ~/.ssh/config
+  use-ssh-config: true
+```
+
+:::
+
+**SSH Configuration File Support**
+
+When `use-ssh-config: true` is set, Clash will read `~/.ssh/config` and apply matching configuration for the specified server. The following SSH config options are supported:
+
+- `Host`: Match pattern for the hostname
+- `HostName`: The actual hostname to connect to
+- `Port`: SSH server port
+- `User`: Username for authentication
+- `IdentityFile`: Path to private key file
+
+Example `~/.ssh/config`:
+
+```
+Host myhost
+    HostName server.example.com
+    Port 22
+    User username
+    IdentityFile ~/.ssh/id_rsa
+```
+
 ## Proxy Groups
 
 Proxy Groups are groups of proxies that you can use directly as a rule policy.

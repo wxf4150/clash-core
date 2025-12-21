@@ -343,6 +343,70 @@ Clash 内置了对流行协议 Trojan 的支持:
 
 :::
 
+### SSH
+
+Clash 支持 SSH 作为代理协议。SSH 代理使用 SSH 隧道来转发流量。它支持密码和私钥认证，并且可以自动从 `~/.ssh/config` 加载配置。
+
+::: tip
+SSH 代理不支持 UDP 流量。仅支持通过 SSH 隧道的 TCP 连接。
+:::
+
+::: code-group
+
+```yaml [密码认证]
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: server
+  port: 22
+  username: user
+  password: "password"
+```
+
+```yaml [私钥认证]
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa
+```
+
+```yaml [SSH配置文件]
+# 这将从 ~/.ssh/config 加载与服务器主机名匹配的配置
+- name: "ssh"
+  type: ssh
+  # interface-name: eth0
+  # routing-mark: 1234
+  server: myhost  # 匹配 ~/.ssh/config 中的 Host 条目
+  use-ssh-config: true
+```
+
+:::
+
+**SSH 配置文件支持**
+
+当设置 `use-ssh-config: true` 时，Clash 将读取 `~/.ssh/config` 并应用与指定服务器匹配的配置。支持以下 SSH 配置选项：
+
+- `Host`: 主机名的匹配模式
+- `HostName`: 要连接的实际主机名
+- `Port`: SSH 服务器端口
+- `User`: 用于认证的用户名
+- `IdentityFile`: 私钥文件路径
+
+`~/.ssh/config` 示例：
+
+```
+Host myhost
+    HostName server.example.com
+    Port 22
+    User username
+    IdentityFile ~/.ssh/id_rsa
+```
+
 ## Proxy Groups 策略组
 
 Proxy Groups 策略组用于根据不同策略分发规则传递过来的请求, 其可以直接被规则引用, 也可以被其他策略组引用, 而最上级策略组被规则引用.
