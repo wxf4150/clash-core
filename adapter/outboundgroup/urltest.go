@@ -10,6 +10,7 @@ import (
 	"github.com/Dreamacro/clash/component/dialer"
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/constant/provider"
+	"github.com/Dreamacro/clash/log"
 )
 
 type urlTestOption func(*URLTest)
@@ -90,7 +91,13 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 
 		// tolerance
 		if u.fastNode == nil || fastNotExist || !u.fastNode.Alive() || u.fastNode.LastDelay() > fast.LastDelay()+u.tolerance {
+			oldNode := u.fastNode
 			u.fastNode = fast
+			if oldNode == nil {
+				log.Infoln("[%s] url-test selected: %s (delay: %dms)", u.Name(), fast.Name(), fast.LastDelay())
+			} else if oldNode.Name() != fast.Name() {
+				log.Infoln("[%s] url-test switched: %s -> %s (delay: %dms -> %dms)", u.Name(), oldNode.Name(), fast.Name(), oldNode.LastDelay(), fast.LastDelay())
+			}
 		}
 
 		return u.fastNode, nil
