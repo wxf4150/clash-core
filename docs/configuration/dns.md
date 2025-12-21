@@ -55,7 +55,24 @@ The concept of "fake IP" addresses is originated from [RFC 3089](https://tools.i
 
 The default CIDR for the fake-ip pool is `198.18.0.1/16`, a reserved IPv4 address space, which can be changed in `dns.fake-ip-range`.
 
+### How fake-ip Works
+
 When a DNS request is sent to the Clash DNS, the core allocates a *free* fake-ip address from the pool, by managing an internal mapping of domain names and their fake-ip addresses.
+
+**Key Points:**
+
+1. **fake-ip addresses are virtual**: The `198.18.0.0/16` range is a reserved address space. These IP addresses are not real network IPs. Clash only maintains an in-memory mapping between domain names and fake-ip addresses.
+
+2. **Clash handles the entire fake-ip range**: When your system or applications send packets to fake-ip addresses, these packets are routed to Clash (via transparent proxy, TUN mode, or system proxy settings). Clash doesn't need to listen on each individual fake-ip address - it handles all fake-ip traffic through:
+   - **Transparent proxy mode** (redir/tproxy): Uses iptables/nftables rules to redirect all traffic destined for the fake-ip range to Clash
+   - **TUN mode**: Clash creates a virtual network interface and takes over routing for the entire fake-ip range
+   - **System proxy mode**: Applications send all traffic to Clash's proxy port
+
+3. **Why fake-ip improves network performance**:
+   - **Avoids DNS query latency**: Applications get a fake-ip immediately and can establish connections without waiting for real DNS resolution
+   - **Defers DNS resolution**: Clash only resolves real IPs when necessary (e.g., for `GEOIP` or `IP-CIDR` rules). For proxy protocols that forward domain names directly (like SOCKS5/VMess), DNS resolution is completely skipped
+   - **Reduces DNS leaks**: All DNS queries are handled internally by Clash, avoiding leakage of real DNS requests upstream
+   - **Parallel connections**: Applications can initiate connections without waiting for DNS resolution, improving concurrency
 
 Take an example of accessing `http://google.com` with your browser.
 

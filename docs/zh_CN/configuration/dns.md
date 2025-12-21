@@ -55,7 +55,24 @@ DNS 配置中的 `listen` 选项控制 Clash 是否提供 DNS 服务器:
 
 fake-ip 池的默认 CIDR 是 `198.18.0.1/16` (一个保留的 IPv4 地址空间, 可以在 `dns.fake-ip-range` 中进行更改).
 
+### fake-ip 的工作原理
+
 当 DNS 请求被发送到 Clash DNS 时, Clash 内核会通过管理内部的域名和其 fake-ip 地址的映射, 从池中分配一个 *空闲* 的 fake-ip 地址.
+
+**关键要点:**
+
+1. **fake-ip 是虚拟 IP 地址**: `198.18.0.0/16` 网段是一个保留的地址空间, 这些 IP 地址不是真实的网络 IP. Clash 只是在内存中维护域名到 fake-ip 的映射关系.
+
+2. **Clash 处理整个 fake-ip 网段**: 当您的系统或应用向 fake-ip 地址发送数据包时, 这些数据包会被路由到 Clash (通过透明代理、TUN 模式或系统代理设置). Clash 不需要监听每个单独的 fake-ip 地址 - 它通过以下机制处理所有 fake-ip 流量:
+   - **透明代理模式** (redir/tproxy): 使用 iptables/nftables 规则将所有目标为 fake-ip 网段的流量重定向到 Clash
+   - **TUN 模式**: Clash 创建虚拟网络接口, 接管整个 fake-ip 网段的路由
+   - **系统代理模式**: 应用程序将所有流量发送到 Clash 的代理端口
+
+3. **为什么 fake-ip 能提升网络速度**:
+   - **避免 DNS 查询延迟**: 应用程序获得 fake-ip 后可以立即建立连接, 不需要等待真实的 DNS 解析完成
+   - **延迟 DNS 解析**: Clash 仅在必要时 (如遇到 `GEOIP` 或 `IP-CIDR` 规则) 才解析真实 IP, 对于直接转发域名的代理协议 (如 SOCKS5/VMess) 则完全跳过 DNS 解析
+   - **减少 DNS 泄漏**: 所有 DNS 查询都由 Clash 内部处理, 避免向上游泄漏真实的 DNS 请求
+   - **并行连接**: 应用程序不需要等待 DNS 解析就能发起连接, 提高并发性能
 
 以使用浏览器访问 `http://google.com` 为例.
 
