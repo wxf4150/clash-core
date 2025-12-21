@@ -72,7 +72,7 @@ func (hc *HealthCheck) checkAll() {
 }
 
 func (hc *HealthCheck) check(proxies []C.Proxy) {
-	log.Infoln("[Health Check] Testing %d proxies", len(proxies))
+	log.Infoln("[Health Check] testing %d proxies", len(proxies))
 	b, _ := batch.New(context.Background(), batch.WithConcurrencyNum(10))
 	for _, proxy := range proxies {
 		p := proxy
