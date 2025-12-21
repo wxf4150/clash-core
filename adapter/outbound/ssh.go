@@ -27,7 +27,7 @@ type SshOption struct {
 	BasicOption
 	Name           string `proxy:"name"`
 	Server         string `proxy:"server"`
-	Port           int    `proxy:"port"`
+	Port           int    `proxy:"port,omitempty"`
 	UserName       string `proxy:"username,omitempty"`
 	Password       string `proxy:"password,omitempty"`
 	PrivateKey     string `proxy:"privatekey,omitempty"`
@@ -117,6 +117,11 @@ func (ss *Ssh) ListenPacketContext(ctx context.Context, metadata *C.Metadata, op
 }
 
 func NewSsh(option SshOption) (*Ssh, error) {
+	// Set default port if not specified
+	if option.Port == 0 {
+		option.Port = 22
+	}
+
 	// Prepare SSH client configuration
 	sshConfig := &ssh.ClientConfig{
 		User:            option.UserName,
