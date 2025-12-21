@@ -12,6 +12,7 @@ import (
 
 	"github.com/Dreamacro/clash/component/dialer"
 	C "github.com/Dreamacro/clash/constant"
+	"github.com/kevinburke/ssh_config"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -208,7 +209,7 @@ func NewSsh(option SshOption) (*Ssh, error) {
 	}, nil
 }
 
-// loadSSHConfig loads SSH configuration from ~/.ssh/config
+// loadSSHConfig loads SSH configuration from ~/.ssh/config using ssh_config package
 // portExplicitlySet indicates whether the port was explicitly configured in the proxy config
 func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	home, err := os.UserHomeDir()
@@ -217,82 +218,58 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	}
 
 	configPath := filepath.Join(home, ".ssh", "config")
-	data, err := os.ReadFile(configPath)
+	
+	// Open and parse SSH config file
+	f, err := os.Open(configPath)
 	if err != nil {
 		// Config file is optional, return nil if not found
 		if os.IsNotExist(err) {
 			return nil
 		}
 		// For other errors, return them as they might indicate permission issues
-		return fmt.Errorf("failed to read SSH config: %w", err)
+		return fmt.Errorf("failed to open SSH config: %w", err)
+	}
+	defer f.Close()
+
+	cfg, err := ssh_config.Decode(f)
+	if err != nil {
+		return fmt.Errorf("failed to parse SSH config: %w", err)
 	}
 
-	// Simple SSH config parser - handles both Unix and Windows line endings
-	// Note: This parser supports exact hostname matching and wildcard '*' only.
-	// More complex SSH config patterns like '?' or '[a-z]' are not supported.
-	content := strings.ReplaceAll(string(data), "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-	var currentHost string
-	inMatchingHost := false
-	originalServer := option.Server
+	// Get configuration for the specified host
+	host := option.Server
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
+	// Get HostName (the actual server to connect to)
+	if hostname, err := cfg.Get(host, "HostName"); err == nil && hostname != "" {
+		option.Server = hostname
+	}
 
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-
-		key := strings.ToLower(parts[0])
-		value := parts[1]
-
-		if key == "host" {
-			currentHost = value
-			// Check if this host matches our server
-			if currentHost == originalServer || currentHost == "*" {
-				inMatchingHost = true
-			} else {
-				inMatchingHost = false
-			}
-			continue
-		}
-
-		if !inMatchingHost {
-			continue
-		}
-
-		// Apply configuration for matching host
-		// Note: Only the first value is used for each option.
-		// Multiple values per option are not currently supported.
-		switch key {
-		case "hostname":
-			// Apply HostName only for exact matches (not wildcards)
-			if currentHost == originalServer {
-				option.Server = value
-			}
-		case "port":
-			// Only use SSH config port if no explicit port was provided in proxy config
-			if port, err := strconv.Atoi(value); err == nil && !portExplicitlySet {
+	// Get Port if not explicitly set in proxy config
+	if !portExplicitlySet {
+		if portStr, err := cfg.Get(host, "Port"); err == nil && portStr != "" {
+			if port, err := strconv.Atoi(portStr); err == nil {
 				option.Port = port
 			}
-		case "user":
-			if option.UserName == "" {
-				option.UserName = value
-			}
-		case "identityfile":
-			if option.PrivateKey == "" {
-				option.PrivateKey = value
-			}
+		}
+	}
+
+	// Get User if not already set
+	if option.UserName == "" {
+		if user, err := cfg.Get(host, "User"); err == nil && user != "" {
+			option.UserName = user
+		}
+	}
+
+	// Get IdentityFile if not already set
+	if option.PrivateKey == "" {
+		if identityFile, err := cfg.Get(host, "IdentityFile"); err == nil && identityFile != "" {
+			option.PrivateKey = identityFile
 		}
 	}
 
 	// Set defaults if not configured
 	if option.Port == 0 {
-		option.Port = 22
+		option.Port = defaultSSHPort
 	}
 
 	return nil

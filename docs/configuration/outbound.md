@@ -393,23 +393,42 @@ SSH proxy does not support UDP traffic. Only TCP connections are supported throu
 
 **SSH Configuration File Support**
 
-When `use-ssh-config: true` is set, Clash will read `~/.ssh/config` and apply matching configuration for the specified server. The following SSH config options are supported:
+When `use-ssh-config: true` is set, Clash will parse `~/.ssh/config` using the `github.com/kevinburke/ssh_config` library and apply matching configuration for the specified server. This provides full SSH config file compatibility, including support for multiple host configurations, wildcards, and pattern matching.
 
-- `Host`: Match pattern for the hostname
+The following SSH config options are supported:
+
+- `Host`: Match pattern for the hostname (supports wildcards and patterns)
 - `HostName`: The actual hostname to connect to
 - `Port`: SSH server port
 - `User`: Username for authentication
 - `IdentityFile`: Path to private key file
 
-Example `~/.ssh/config`:
+Example `~/.ssh/config` with multiple hosts:
 
 ```
+Host server1
+    HostName srv1.example.com
+    Port 2222
+    User user1
+    IdentityFile ~/.ssh/id_server1
+
+Host server2
+    HostName srv2.example.com
+    Port 22
+    User user2
+    IdentityFile ~/.ssh/id_server2
+
 Host myhost
     HostName server.example.com
     Port 22
     User username
     IdentityFile ~/.ssh/id_rsa
+
+Host *
+    ServerAliveInterval 60
 ```
+
+With this config, you can reference any host by its `Host` name in the proxy configuration.
 
 ## Proxy Groups
 

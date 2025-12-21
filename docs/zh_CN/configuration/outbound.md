@@ -389,23 +389,42 @@ SSH 代理不支持 UDP 流量。仅支持通过 SSH 隧道的 TCP 连接。
 
 **SSH 配置文件支持**
 
-当设置 `use-ssh-config: true` 时，Clash 将读取 `~/.ssh/config` 并应用与指定服务器匹配的配置。支持以下 SSH 配置选项：
+当设置 `use-ssh-config: true` 时，Clash 将使用 `github.com/kevinburke/ssh_config` 库解析 `~/.ssh/config` 并应用与指定服务器匹配的配置。这提供了完整的 SSH 配置文件兼容性，包括对多个主机配置、通配符和模式匹配的支持。
 
-- `Host`: 主机名的匹配模式
+支持以下 SSH 配置选项：
+
+- `Host`: 主机名的匹配模式（支持通配符和模式匹配）
 - `HostName`: 要连接的实际主机名
 - `Port`: SSH 服务器端口
 - `User`: 用于认证的用户名
 - `IdentityFile`: 私钥文件路径
 
-`~/.ssh/config` 示例：
+包含多个主机的 `~/.ssh/config` 示例：
 
 ```
+Host server1
+    HostName srv1.example.com
+    Port 2222
+    User user1
+    IdentityFile ~/.ssh/id_server1
+
+Host server2
+    HostName srv2.example.com
+    Port 22
+    User user2
+    IdentityFile ~/.ssh/id_server2
+
 Host myhost
     HostName server.example.com
     Port 22
     User username
     IdentityFile ~/.ssh/id_rsa
+
+Host *
+    ServerAliveInterval 60
 ```
+
+通过此配置，您可以在代理配置中通过 `Host` 名称引用任何主机。
 
 ## Proxy Groups 策略组
 
