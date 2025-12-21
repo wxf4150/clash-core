@@ -240,13 +240,16 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	host := option.Server
 
 	// Get HostName (the actual server to connect to)
-	if hostname, err := cfg.Get(host, "HostName"); err == nil && hostname != "" {
+	// If the key doesn't exist in config, Get returns an error, which we ignore
+	hostname, _ := cfg.Get(host, "HostName")
+	if hostname != "" {
 		option.Server = hostname
 	}
 
 	// Get Port if not explicitly set in proxy config
 	if !portExplicitlySet {
-		if portStr, err := cfg.Get(host, "Port"); err == nil && portStr != "" {
+		portStr, _ := cfg.Get(host, "Port")
+		if portStr != "" {
 			if port, err := strconv.Atoi(portStr); err == nil {
 				option.Port = port
 			}
@@ -255,14 +258,16 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 
 	// Get User if not already set
 	if option.UserName == "" {
-		if user, err := cfg.Get(host, "User"); err == nil && user != "" {
+		user, _ := cfg.Get(host, "User")
+		if user != "" {
 			option.UserName = user
 		}
 	}
 
 	// Get IdentityFile if not already set
 	if option.PrivateKey == "" {
-		if identityFile, err := cfg.Get(host, "IdentityFile"); err == nil && identityFile != "" {
+		identityFile, _ := cfg.Get(host, "IdentityFile")
+		if identityFile != "" {
 			option.PrivateKey = identityFile
 		}
 	}
