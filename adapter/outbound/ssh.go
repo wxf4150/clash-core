@@ -15,6 +15,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const (
+	defaultSSHPort = 22
+)
+
 type Ssh struct {
 	*Base
 	user           string
@@ -41,9 +45,21 @@ type sshConn struct {
 }
 
 func (c *sshConn) Close() error {
-	c.Conn.Close()
-	c.client.Close()
-	return c.underConn.Close()
+	// Close the tunnel connection first
+	connErr := c.Conn.Close()
+	// Close the SSH client
+	clientErr := c.client.Close()
+	// Close the underlying connection
+	underErr := c.underConn.Close()
+	
+	// Return the first error encountered
+	if connErr != nil {
+		return connErr
+	}
+	if clientErr != nil {
+		return clientErr
+	}
+	return underErr
 }
 
 func (c *sshConn) Read(b []byte) (int, error) {
@@ -119,19 +135,25 @@ func (ss *Ssh) ListenPacketContext(ctx context.Context, metadata *C.Metadata, op
 func NewSsh(option SshOption) (*Ssh, error) {
 	// Set default port if not specified
 	if option.Port == 0 {
-		option.Port = 22
+		option.Port = defaultSSHPort
 	}
+
+	// Store the explicitly configured port for later comparison
+	explicitlyConfiguredPort := option.Port
 
 	// Prepare SSH client configuration
 	sshConfig := &ssh.ClientConfig{
-		User:            option.UserName,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Add host key verification
+		User: option.UserName,
+		// Note: Using InsecureIgnoreHostKey bypasses host key verification.
+		// This is insecure but commonly used for proxies. In production,
+		// consider implementing proper host key verification using known_hosts.
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         C.DefaultTCPTimeout,
 	}
 
 	// Handle SSH config file if enabled
 	if option.UseSSHConfig {
-		if err := loadSSHConfig(&option); err != nil {
+		if err := loadSSHConfig(&option, explicitlyConfiguredPort); err != nil {
 			return nil, fmt.Errorf("failed to load SSH config: %w", err)
 		}
 	}
@@ -191,7 +213,8 @@ func NewSsh(option SshOption) (*Ssh, error) {
 }
 
 // loadSSHConfig loads SSH configuration from ~/.ssh/config
-func loadSSHConfig(option *SshOption) error {
+// explicitPort is the port that was explicitly configured (0 means use default)
+func loadSSHConfig(option *SshOption, explicitPort int) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -200,14 +223,22 @@ func loadSSHConfig(option *SshOption) error {
 	configPath := filepath.Join(home, ".ssh", "config")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		// Config file is optional
-		return nil
+		// Config file is optional, return nil if not found
+		if os.IsNotExist(err) {
+			return nil
+		}
+		// For other errors, return them as they might indicate permission issues
+		return fmt.Errorf("failed to read SSH config: %w", err)
 	}
 
-	// Simple SSH config parser
-	lines := strings.Split(string(data), "\n")
+	// Simple SSH config parser - handles both Unix and Windows line endings
+	// Note: This parser supports exact hostname matching and wildcard '*' only.
+	// More complex SSH config patterns like '?' or '[a-z]' are not supported.
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
 	var currentHost string
 	inMatchingHost := false
+	originalServer := option.Server
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -226,7 +257,7 @@ func loadSSHConfig(option *SshOption) error {
 		if key == "host" {
 			currentHost = value
 			// Check if this host matches our server
-			if currentHost == option.Server || currentHost == "*" {
+			if currentHost == originalServer || currentHost == "*" {
 				inMatchingHost = true
 			} else {
 				inMatchingHost = false
@@ -239,13 +270,17 @@ func loadSSHConfig(option *SshOption) error {
 		}
 
 		// Apply configuration for matching host
+		// Note: Only the first value is used for each option.
+		// Multiple values per option are not currently supported.
 		switch key {
 		case "hostname":
-			if option.Server == currentHost {
+			// Apply HostName only for exact matches (not wildcards)
+			if currentHost == originalServer {
 				option.Server = value
 			}
 		case "port":
-			if port, err := strconv.Atoi(value); err == nil && option.Port == 0 {
+			// Only use SSH config port if no explicit port was provided
+			if port, err := strconv.Atoi(value); err == nil && explicitPort == 0 {
 				option.Port = port
 			}
 		case "user":
