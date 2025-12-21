@@ -370,17 +370,18 @@ proxy-groups:
       - ss1
       - ss2
 
-  # url-test 通过对 指定URL 进行基准速度测试来选择将使用哪个代理.
+  # url-test 通过定期发送 HTTP HEAD 请求来测量网络延迟（响应时间，而非下载速度），
+  # 并选择延迟最低的代理。测试会在启动时执行一次，然后每隔 'interval' 秒执行一次。
   - name: "auto"
     type: url-test
     proxies:
       - ss1
       - ss2
       - vmess1
-    # tolerance: 150
-    # lazy: true
+    # tolerance: 150 # 触发切换的延迟差值（毫秒）
+    # lazy: true # 为 true 时，仅在策略组被使用时才运行测试
     url: 'http://www.gstatic.com/generate_204'
-    interval: 300
+    interval: 300 # 测试间隔，单位为秒
 
   # fallback-auto 基于优先级选择可用策略. 可用性通过访问 指定URL 来测试, 就像自动 url-test 组一样.
   - name: "fallback-auto"

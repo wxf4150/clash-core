@@ -374,17 +374,19 @@ proxy-groups:
       - ss1
       - ss2
 
-  # url-test select which proxy will be used by benchmarking speed to a URL.
+  # url-test selects the proxy with the lowest latency (network delay) by periodically
+  # sending HTTP HEAD requests to test the response time, not download speed.
+  # Tests run at startup and then every 'interval' seconds.
   - name: "auto"
     type: url-test
     proxies:
       - ss1
       - ss2
       - vmess1
-    # tolerance: 150
-    # lazy: true
+    # tolerance: 150 # the latency difference in milliseconds to trigger a switch
+    # lazy: true # when true, tests only run when this group is used
     url: 'http://www.gstatic.com/generate_204'
-    interval: 300
+    interval: 300 # test interval in seconds
 
   # fallback selects an available policy by priority. The availability is tested by accessing an URL, just like an auto url-test group.
   - name: "fallback-auto"
