@@ -9,6 +9,44 @@ Since some parts of Clash run on the Layer 3 (Network Layer), they would've been
 
 *Enter fake-ip*. It enables rule-based routing, minimises the impact of DNS pollution attack and improves network performance, sometimes drastically.
 
+## Why DNS Configuration is Optional
+
+DNS configuration in Clash is **optional** because Clash can operate in different modes:
+
+1. **When DNS is disabled** (`enable: false` or DNS section omitted): Clash uses the **system's default DNS resolver** to resolve domain names. This is the simplest setup but provides no protection against DNS pollution.
+
+2. **When DNS is enabled** (`enable: true`): Clash uses its own DNS resolver with the configured nameservers, which provides:
+   - Protection against DNS pollution
+   - Support for fake-ip mode for better performance
+   - Custom DNS routing policies
+   - DoH (DNS over HTTPS) and DoT (DNS over TLS) support
+
+## How DNS Listen Address Works
+
+The `listen` option in DNS configuration controls whether Clash provides a DNS server:
+
+- **With listen address** (e.g., `listen: 0.0.0.0:53`): Clash starts a DNS server on the specified address and port. Other devices on your network can use Clash as their DNS server.
+- **Without listen address**: Clash's DNS resolver is only used internally for Clash's own traffic routing. No external DNS server is exposed.
+
+## DNS Resolution Behavior
+
+### When DNS is Enabled
+
+When you enable DNS in the configuration with `enable: true`:
+
+1. Clash creates an internal DNS resolver using the configured `nameserver` list
+2. All domain name resolution for Clash's traffic routing goes through this internal resolver
+3. If `listen` is configured, Clash also provides a DNS server for other applications
+4. The configured nameservers (e.g., `8.8.8.8`, `1.1.1.1`) are used to resolve domain names
+
+### When DNS is Disabled
+
+When DNS is disabled or not configured:
+
+1. Clash uses the **system's default DNS resolver** (typically `/etc/resolv.conf` on Linux, system DNS settings on Windows/macOS)
+2. No DNS server is provided even if `listen` is configured
+3. No fake-ip or enhanced DNS features are available
+
 ## fake-ip
 
 The concept of "fake IP" addresses is originated from [RFC 3089](https://tools.ietf.org/rfc/rfc3089):

@@ -9,6 +9,44 @@ sidebarOrder: 6
 
 *Enter fake-ip*: 它支持基于规则的路由, 最大程度地减少了 DNS 污染攻击的影响, 并且提高了网络性能, 有时甚至是显著的.
 
+## 为什么 DNS 配置是可选的
+
+Clash 中的 DNS 配置是**可选的**, 因为 Clash 可以在不同模式下运行:
+
+1. **当 DNS 被禁用时** (`enable: false` 或省略 DNS 配置段): Clash 使用**系统默认的 DNS 解析器**来解析域名. 这是最简单的配置方式, 但无法防止 DNS 污染.
+
+2. **当 DNS 被启用时** (`enable: true`): Clash 使用自己的 DNS 解析器和配置的域名服务器, 这提供了:
+   - 防止 DNS 污染
+   - 支持 fake-ip 模式以获得更好的性能
+   - 自定义 DNS 路由策略
+   - 支持 DoH (DNS over HTTPS) 和 DoT (DNS over TLS)
+
+## DNS 监听地址的工作原理
+
+DNS 配置中的 `listen` 选项控制 Clash 是否提供 DNS 服务器:
+
+- **配置了监听地址** (例如 `listen: 0.0.0.0:53`): Clash 在指定的地址和端口上启动 DNS 服务器. 网络中的其他设备可以使用 Clash 作为它们的 DNS 服务器.
+- **未配置监听地址**: Clash 的 DNS 解析器仅在内部用于 Clash 自身的流量路由. 不会对外暴露 DNS 服务器.
+
+## DNS 解析行为
+
+### 当 DNS 被启用时
+
+当您在配置中使用 `enable: true` 启用 DNS 时:
+
+1. Clash 使用配置的 `nameserver` 列表创建内部 DNS 解析器
+2. Clash 流量路由的所有域名解析都通过这个内部解析器
+3. 如果配置了 `listen`, Clash 还会为其他应用程序提供 DNS 服务器
+4. 配置的域名服务器 (例如 `8.8.8.8`, `1.1.1.1`) 将用于解析域名
+
+### 当 DNS 被禁用时
+
+当 DNS 被禁用或未配置时:
+
+1. Clash 使用**系统默认的 DNS 解析器** (通常是 Linux 上的 `/etc/resolv.conf`, Windows/macOS 上的系统 DNS 设置)
+2. 即使配置了 `listen` 也不会提供 DNS 服务器
+3. fake-ip 或增强的 DNS 功能均不可用
+
 ## fake-ip
 
 "fake IP" 的概念源自 [RFC 3089](https://tools.ietf.org/rfc/rfc3089):
