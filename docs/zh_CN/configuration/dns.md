@@ -74,6 +74,76 @@ fake-ip 池的默认 CIDR 是 `198.18.0.1/16` (一个保留的 IPv4 地址空间
    - **减少 DNS 泄漏**: 所有 DNS 查询都由 Clash 内部处理, 避免向上游泄漏真实的 DNS 请求
    - **并行连接**: 应用程序不需要等待 DNS 解析就能发起连接, 提高并发性能
 
+### fake-ip 的系统配置要求
+
+要使 fake-ip 正常工作, 需要进行以下配置:
+
+**1. DNS 配置 (必需)**
+
+首先, 您需要将系统 DNS 设置为 Clash 的 DNS 服务器地址. 这可以通过以下方式实现:
+
+- **手动配置**: 修改系统 DNS 设置指向 Clash DNS 监听地址 (例如 `127.0.0.1:53`)
+- **DHCP 配置**: 如果 Clash 运行在路由器上, 可以通过 DHCP 分发 Clash DNS 地址
+- **系统级配置**: 修改 `/etc/resolv.conf` (Linux) 或网络设置 (Windows/macOS)
+
+在 Clash 配置中启用 DNS:
+
+```yaml
+dns:
+  enable: true
+  listen: 0.0.0.0:53  # 提供 DNS 服务
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+```
+
+**2. 流量路由配置 (取决于模式)**
+
+fake-ip 返回虚拟 IP 地址后, 还需要将发往 fake-ip 网段的流量路由到 Clash. 不同模式的配置方式不同:
+
+**系统代理模式 (最简单)**
+- 应用程序使用系统代理设置, 将所有流量发送到 Clash 的 HTTP/SOCKS5 端口
+- **无需额外配置**: 应用程序自动将流量发送到 Clash
+- **局限性**: 仅支持配置了代理的应用程序
+
+**透明代理模式 (需要手动配置)**
+- 使用 iptables (Linux) 或 pf (macOS) 规则将 fake-ip 网段流量重定向到 Clash
+- **需要手动配置**: 启动时需要创建 iptables/pf 规则
+- **示例 (Linux iptables)**:
+  ```bash
+  # 重定向 TCP 流量到 Clash redir 端口
+  iptables -t nat -A OUTPUT -d 198.18.0.0/16 -p tcp -j REDIRECT --to-ports 7892
+  # 重定向 UDP 流量 (tproxy 模式)
+  iptables -t mangle -A OUTPUT -d 198.18.0.0/16 -p udp -j TPROXY --on-port 7893
+  ```
+- **注意**: 这些规则需要手动维护, 每次重启后需要重新配置
+
+**TUN 模式 (自动配置 - Premium 版本)**
+- Clash Premium 支持 TUN 模式, 可以**自动管理**路由表和规则
+- **自动配置**: 启用 `tun.auto-route: true` 后, Clash 会自动配置路由
+- **示例配置**:
+  ```yaml
+  tun:
+    enable: true
+    stack: system
+    dns-hijack:
+      - any:53
+    auto-route: true  # 自动配置路由规则
+    auto-detect-interface: true
+  ```
+- **优势**: 无需手动配置 iptables 规则, Clash 在启动时自动设置, 退出时自动清理
+- **注意**: 需要管理员权限运行, 详见 [TUN 设备文档](/zh_CN/premium/tun-device)
+
+**总结配置步骤**:
+1. 配置 Clash DNS (必需)
+2. 设置系统 DNS 指向 Clash (手动配置)
+3. 选择流量路由模式:
+   - 系统代理: 配置应用程序代理设置 (手动)
+   - 透明代理: 配置 iptables/pf 规则 (手动, 每次启动)
+   - TUN 模式: 启用 `auto-route` (自动, 推荐)
+
 以使用浏览器访问 `http://google.com` 为例.
 
 1. 浏览器向 Clash DNS 请求 `google.com` 的 IP 地址

@@ -74,6 +74,76 @@ When a DNS request is sent to the Clash DNS, the core allocates a *free* fake-ip
    - **Reduces DNS leaks**: All DNS queries are handled internally by Clash, avoiding leakage of real DNS requests upstream
    - **Parallel connections**: Applications can initiate connections without waiting for DNS resolution, improving concurrency
 
+### System Configuration Requirements for fake-ip
+
+For fake-ip to work properly, the following configuration is required:
+
+**1. DNS Configuration (Required)**
+
+First, you need to set your system DNS to Clash's DNS server address. This can be done by:
+
+- **Manual configuration**: Change system DNS settings to point to Clash DNS listen address (e.g., `127.0.0.1:53`)
+- **DHCP configuration**: If Clash runs on a router, distribute Clash DNS address via DHCP
+- **System-level configuration**: Modify `/etc/resolv.conf` (Linux) or network settings (Windows/macOS)
+
+Enable DNS in Clash configuration:
+
+```yaml
+dns:
+  enable: true
+  listen: 0.0.0.0:53  # Provide DNS service
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+```
+
+**2. Traffic Routing Configuration (Mode-Dependent)**
+
+After fake-ip returns virtual IP addresses, traffic destined for the fake-ip range needs to be routed to Clash. Different modes require different configuration:
+
+**System Proxy Mode (Simplest)**
+- Applications use system proxy settings to send all traffic to Clash's HTTP/SOCKS5 port
+- **No additional configuration needed**: Applications automatically send traffic to Clash
+- **Limitation**: Only works for applications that respect proxy settings
+
+**Transparent Proxy Mode (Manual Configuration Required)**
+- Uses iptables (Linux) or pf (macOS) rules to redirect fake-ip range traffic to Clash
+- **Manual configuration required**: iptables/pf rules must be created at startup
+- **Example (Linux iptables)**:
+  ```bash
+  # Redirect TCP traffic to Clash redir port
+  iptables -t nat -A OUTPUT -d 198.18.0.0/16 -p tcp -j REDIRECT --to-ports 7892
+  # Redirect UDP traffic (tproxy mode)
+  iptables -t mangle -A OUTPUT -d 198.18.0.0/16 -p udp -j TPROXY --on-port 7893
+  ```
+- **Note**: These rules need manual maintenance and must be reconfigured after each reboot
+
+**TUN Mode (Automatic Configuration - Premium Version)**
+- Clash Premium supports TUN mode with **automatic management** of route tables and rules
+- **Automatic configuration**: With `tun.auto-route: true`, Clash automatically configures routes
+- **Example configuration**:
+  ```yaml
+  tun:
+    enable: true
+    stack: system
+    dns-hijack:
+      - any:53
+    auto-route: true  # Automatically configure routing rules
+    auto-detect-interface: true
+  ```
+- **Advantage**: No manual iptables configuration needed. Clash automatically sets up rules on startup and cleans up on exit
+- **Note**: Requires administrator privileges. See [TUN Device documentation](/premium/tun-device) for details
+
+**Configuration Summary**:
+1. Configure Clash DNS (required)
+2. Set system DNS to point to Clash (manual configuration)
+3. Choose traffic routing mode:
+   - System proxy: Configure application proxy settings (manual)
+   - Transparent proxy: Configure iptables/pf rules (manual, on each startup)
+   - TUN mode: Enable `auto-route` (automatic, recommended)
+
 Take an example of accessing `http://google.com` with your browser.
 
 1. The browser asks Clash DNS for the IP address of `google.com`
