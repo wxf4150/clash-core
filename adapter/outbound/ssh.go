@@ -87,16 +87,12 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 	}
 
 	client := ssh.NewClient(clientConn, chans, reqs)
-	defer func() {
-		if err != nil {
-			client.Close()
-		}
-	}()
 
 	// Dial to the target through SSH tunnel
 	remoteAddr := net.JoinHostPort(metadata.String(), metadata.DstPort.String())
 	remoteConn, err := client.Dial("tcp", remoteAddr)
 	if err != nil {
+		client.Close()
 		return nil, fmt.Errorf("ssh tunnel dial failed: %w", err)
 	}
 
@@ -133,13 +129,13 @@ func (ss *Ssh) ListenPacketContext(ctx context.Context, metadata *C.Metadata, op
 }
 
 func NewSsh(option SshOption) (*Ssh, error) {
+	// Track if port was explicitly configured (0 means not configured)
+	portExplicitlySet := option.Port != 0
+	
 	// Set default port if not specified
 	if option.Port == 0 {
 		option.Port = defaultSSHPort
 	}
-
-	// Store the explicitly configured port for later comparison
-	explicitlyConfiguredPort := option.Port
 
 	// Prepare SSH client configuration
 	sshConfig := &ssh.ClientConfig{
@@ -153,7 +149,7 @@ func NewSsh(option SshOption) (*Ssh, error) {
 
 	// Handle SSH config file if enabled
 	if option.UseSSHConfig {
-		if err := loadSSHConfig(&option, explicitlyConfiguredPort); err != nil {
+		if err := loadSSHConfig(&option, portExplicitlySet); err != nil {
 			return nil, fmt.Errorf("failed to load SSH config: %w", err)
 		}
 	}
@@ -213,8 +209,8 @@ func NewSsh(option SshOption) (*Ssh, error) {
 }
 
 // loadSSHConfig loads SSH configuration from ~/.ssh/config
-// explicitPort is the port that was explicitly configured (0 means use default)
-func loadSSHConfig(option *SshOption, explicitPort int) error {
+// portExplicitlySet indicates whether the port was explicitly configured in the proxy config
+func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -279,8 +275,8 @@ func loadSSHConfig(option *SshOption, explicitPort int) error {
 				option.Server = value
 			}
 		case "port":
-			// Only use SSH config port if no explicit port was provided
-			if port, err := strconv.Atoi(value); err == nil && explicitPort == 0 {
+			// Only use SSH config port if no explicit port was provided in proxy config
+			if port, err := strconv.Atoi(value); err == nil && !portExplicitlySet {
 				option.Port = port
 			}
 		case "user":
