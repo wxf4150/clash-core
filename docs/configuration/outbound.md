@@ -356,7 +356,9 @@ The request sent to this proxy group will be relayed through the specified proxy
 
 ### url-test
 
-Clash benchmarks each proxy servers in the list, by sending HTTP HEAD requests to a specified URL through these servers periodically. It's possible to set a maximum tolerance value, benchmarking interval, and the target URL.
+Clash benchmarks each proxy server in the list by measuring **network latency (delay)** through sending HTTP HEAD requests to a specified URL. The latency test runs automatically at startup and then periodically based on the `interval` setting (in seconds). You can configure a maximum tolerance value, the testing interval, and the target URL.
+
+The group automatically selects the proxy with the lowest latency. When `lazy: true` is set, health checks only run when the group is actively used (within the interval period).
 
 ### fallback
 
