@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"net"
 	"os"
@@ -30,13 +31,13 @@ type Ssh struct {
 
 type SshOption struct {
 	BasicOption
-	Name           string `proxy:"name"`
-	Server         string `proxy:"server"`
-	Port           int    `proxy:"port,omitempty"`
-	UserName       string `proxy:"username,omitempty"`
-	Password       string `proxy:"password,omitempty"`
-	PrivateKey     string `proxy:"privatekey,omitempty"`
-	UseSSHConfig   bool   `proxy:"use-ssh-config,omitempty"`
+	Name         string `proxy:"name"`
+	Server       string `proxy:"server"`
+	Port         int    `proxy:"port,omitempty"`
+	UserName     string `proxy:"username,omitempty"`
+	Password     string `proxy:"password,omitempty"`
+	PrivateKey   string `proxy:"privatekey,omitempty"`
+	UseSSHConfig bool   `proxy:"use-ssh-config,omitempty"`
 }
 
 type sshConn struct {
@@ -52,7 +53,7 @@ func (c *sshConn) Close() error {
 	clientErr := c.client.Close()
 	// Close the underlying connection
 	underErr := c.underConn.Close()
-	
+
 	// Return the first error encountered
 	if connErr != nil {
 		return connErr
@@ -84,7 +85,7 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 	// Create SSH client from the connection
 	clientConn, chans, reqs, err := ssh.NewClientConn(c, ss.addr, ss.sshConfig)
 	if err != nil {
-		return nil, fmt.Errorf("ssh connection failed: %w", err)
+		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)
 	}
 
 	client := ssh.NewClient(clientConn, chans, reqs)
@@ -108,7 +109,7 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 func (ss *Ssh) DialContext(ctx context.Context, metadata *C.Metadata, opts ...dialer.Option) (_ C.Conn, err error) {
 	c, err := dialer.DialContext(ctx, "tcp", ss.addr, ss.Base.DialOptions(opts...)...)
 	if err != nil {
-		return nil, fmt.Errorf("%s connect error: %w", ss.addr, err)
+		return nil, fmt.Errorf("ssh %s connect error: %w", ss.addr, err)
 	}
 	tcpKeepAlive(c)
 
@@ -132,7 +133,7 @@ func (ss *Ssh) ListenPacketContext(ctx context.Context, metadata *C.Metadata, op
 func NewSsh(option SshOption) (*Ssh, error) {
 	// Track if port was explicitly configured (0 means not configured)
 	portExplicitlySet := option.Port != 0
-	
+
 	// Set default port if not specified
 	if option.Port == 0 {
 		option.Port = defaultSSHPort
@@ -153,6 +154,9 @@ func NewSsh(option SshOption) (*Ssh, error) {
 		if err := loadSSHConfig(&option, portExplicitlySet); err != nil {
 			return nil, fmt.Errorf("failed to load SSH config: %w", err)
 		}
+	}
+	if sshConfig.User == "" {
+		sshConfig.User = option.UserName
 	}
 
 	// Setup authentication
@@ -180,6 +184,7 @@ func NewSsh(option SshOption) (*Ssh, error) {
 		}
 
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
+		log.Infof("SSH: %s@%s:%d using private key authentication from %s", option.UserName, option.Name, option.Port, keyPath)
 	}
 
 	// Add password authentication if provided
@@ -218,7 +223,7 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	}
 
 	configPath := filepath.Join(home, ".ssh", "config")
-	
+
 	// Open and parse SSH config file
 	f, err := os.Open(configPath)
 	if err != nil {
@@ -237,7 +242,7 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	}
 
 	// Get configuration for the specified host
-	host := option.Server
+	host := option.Name
 
 	// Get HostName (the actual server to connect to)
 	// If the key doesn't exist in config, Get returns an error, which we ignore
@@ -258,9 +263,11 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 
 	// Get User if not already set
 	if option.UserName == "" {
-		user, _ := cfg.Get(host, "User")
-		if user != "" {
-			option.UserName = user
+		users, _ := cfg.GetAll(host, "User")
+		if len(users) > 0 {
+			option.UserName = users[0]
+		} else {
+			log.Println("SSH config: No User found for host", host)
 		}
 	}
 
@@ -269,6 +276,15 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 		identityFile, _ := cfg.Get(host, "IdentityFile")
 		if identityFile != "" {
 			option.PrivateKey = identityFile
+		} else {
+			//default to ~/.ssh/id_rsa or ~/.ssh/id_ed25519 ; use the first  exists file
+			idRsaPath := filepath.Join(home, ".ssh", "id_rsa")
+			idEd25519Path := filepath.Join(home, ".ssh", "id_ed25519")
+			if _, err := os.Stat(idRsaPath); err == nil {
+				option.PrivateKey = idRsaPath
+			} else if _, err := os.Stat(idEd25519Path); err == nil {
+				option.PrivateKey = idEd25519Path
+			}
 		}
 	}
 
