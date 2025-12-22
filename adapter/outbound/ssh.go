@@ -3,16 +3,17 @@ package outbound
 import (
 	"context"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Dreamacro/clash/component/dialer"
 	C "github.com/Dreamacro/clash/constant"
+	"github.com/Dreamacro/clash/log"
 	"github.com/kevinburke/ssh_config"
 	"golang.org/x/crypto/ssh"
 )
@@ -27,6 +28,11 @@ type Ssh struct {
 	pass           string
 	privateKeyPath string
 	sshConfig      *ssh.ClientConfig
+	
+	// Connection multiplexing
+	clientMu sync.Mutex
+	client   *ssh.Client
+	underConn net.Conn
 }
 
 type SshOption struct {
@@ -80,9 +86,102 @@ func (c *sshConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// getOrCreateClient returns an active SSH client, creating one if necessary
+func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*ssh.Client, error) {
+	ss.clientMu.Lock()
+	defer ss.clientMu.Unlock()
+	
+	// Check if existing client is still alive
+	if ss.client != nil {
+		// Try to send a keepalive to check if connection is alive
+		_, _, err := ss.client.SendRequest("keepalive@openssh.com", true, nil)
+		if err == nil {
+			return ss.client, nil
+		}
+		// Connection is dead, close and recreate
+		log.Infoln("[SSH] %s connection lost, reconnecting...", ss.addr)
+		ss.client.Close()
+		if ss.underConn != nil {
+			ss.underConn.Close()
+		}
+		ss.client = nil
+		ss.underConn = nil
+	}
+	
+	// Create new SSH connection
+	underConn, err := dialer.DialContext(ctx, "tcp", ss.addr, ss.Base.DialOptions(opts...)...)
+	if err != nil {
+		return nil, fmt.Errorf("ssh %s tcp connect error: %w", ss.addr, err)
+	}
+	tcpKeepAlive(underConn)
+	
+	clientConn, chans, reqs, err := ssh.NewClientConn(underConn, ss.addr, ss.sshConfig)
+	if err != nil {
+		underConn.Close()
+		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)
+	}
+	
+	client := ssh.NewClient(clientConn, chans, reqs)
+	ss.client = client
+	ss.underConn = underConn
+	
+	log.Infoln("[SSH] %s@%s connected successfully (multiplexing enabled)", ss.sshConfig.User, ss.addr)
+	
+	// Start a goroutine to monitor the connection
+	go ss.monitorConnection()
+	
+	return client, nil
+}
+
+// monitorConnection monitors the SSH connection and logs when it disconnects
+func (ss *Ssh) monitorConnection() {
+	if ss.client == nil {
+		return
+	}
+	
+	// Wait for the connection to close
+	ss.client.Wait()
+	
+	ss.clientMu.Lock()
+	defer ss.clientMu.Unlock()
+	
+	if ss.client != nil {
+		log.Infoln("[SSH] %s@%s connection closed, will reconnect on next request", ss.sshConfig.User, ss.addr)
+		ss.client = nil
+		if ss.underConn != nil {
+			ss.underConn.Close()
+			ss.underConn = nil
+		}
+	}
+}
+
+// DialContext implements C.ProxyAdapter
+func (ss *Ssh) DialContext(ctx context.Context, metadata *C.Metadata, opts ...dialer.Option) (_ C.Conn, err error) {
+	// Get or create multiplexed SSH client
+	client, err := ss.getOrCreateClient(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Dial to the target through SSH tunnel
+	remoteAddr := net.JoinHostPort(metadata.String(), metadata.DstPort.String())
+	remoteConn, err := client.Dial("tcp", remoteAddr)
+	if err != nil {
+		return nil, fmt.Errorf("ssh tunnel dial to %s failed: %w", remoteAddr, err)
+	}
+	
+	return NewConn(&sshTunnelConn{Conn: remoteConn}, ss), nil
+}
+
+// sshTunnelConn wraps a connection created through SSH tunnel
+type sshTunnelConn struct {
+	net.Conn
+}
+
 // StreamConn implements C.ProxyAdapter
 func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
-	// Create SSH client from the connection
+	// This method is kept for compatibility but not used with multiplexing
+	// Create a temporary SSH client for this connection
 	clientConn, chans, reqs, err := ssh.NewClientConn(c, ss.addr, ss.sshConfig)
 	if err != nil {
 		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)
@@ -103,26 +202,6 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 		client:    client,
 		underConn: c,
 	}, nil
-}
-
-// DialContext implements C.ProxyAdapter
-func (ss *Ssh) DialContext(ctx context.Context, metadata *C.Metadata, opts ...dialer.Option) (_ C.Conn, err error) {
-	c, err := dialer.DialContext(ctx, "tcp", ss.addr, ss.Base.DialOptions(opts...)...)
-	if err != nil {
-		return nil, fmt.Errorf("ssh %s connect error: %w", ss.addr, err)
-	}
-	tcpKeepAlive(c)
-
-	defer func(c net.Conn) {
-		safeConnClose(c, err)
-	}(c)
-
-	c, err = ss.StreamConn(c, metadata)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewConn(c, ss), nil
 }
 
 // ListenPacketContext implements C.ProxyAdapter
@@ -184,7 +263,6 @@ func NewSsh(option SshOption) (*Ssh, error) {
 		}
 
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
-		log.Infof("SSH: %s@%s:%d using private key authentication from %s", option.UserName, option.Name, option.Port, keyPath)
 	}
 
 	// Add password authentication if provided
@@ -267,7 +345,7 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 		if len(users) > 0 {
 			option.UserName = users[0]
 		} else {
-			log.Println("SSH config: No User found for host", host)
+			log.Warnln("SSH config: No User found for host %s", host)
 		}
 	}
 
