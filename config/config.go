@@ -502,6 +502,51 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 	return rules, nil
 }
 
+func parseSystemHosts() map[string]string {
+	hostsMap := make(map[string]string)
+	
+	// Try to read system hosts file
+	hostsFiles := []string{"/etc/hosts"}
+	// Windows hosts file path
+	if _, err := os.Stat("C:\\Windows\\System32\\drivers\\etc\\hosts"); err == nil {
+		hostsFiles = append(hostsFiles, "C:\\Windows\\System32\\drivers\\etc\\hosts")
+	}
+	
+	for _, hostsFile := range hostsFiles {
+		data, err := os.ReadFile(hostsFile)
+		if err != nil {
+			continue
+		}
+		
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			// Skip empty lines and comments
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			
+			// Parse line: IP hostname [aliases...]
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			
+			ip := fields[0]
+			// Add all hostnames/aliases for this IP
+			for _, hostname := range fields[1:] {
+				// Skip comments inline
+				if strings.HasPrefix(hostname, "#") {
+					break
+				}
+				hostsMap[hostname] = ip
+			}
+		}
+	}
+	
+	return hostsMap
+}
+
 func parseHosts(cfg *RawConfig) (*trie.DomainTrie, error) {
 	tree := trie.New()
 
@@ -510,6 +555,18 @@ func parseHosts(cfg *RawConfig) (*trie.DomainTrie, error) {
 		log.Errorln("insert localhost to host error: %s", err.Error())
 	}
 
+	// Load system hosts file if DNS.UseHosts is enabled (defaults to true)
+	if cfg.DNS.UseHosts {
+		systemHosts := parseSystemHosts()
+		for domain, ipStr := range systemHosts {
+			ip := net.ParseIP(ipStr)
+			if ip != nil {
+				tree.Insert(domain, ip)
+			}
+		}
+	}
+
+	// Config hosts override system hosts
 	if len(cfg.Hosts) != 0 {
 		for domain, ipStr := range cfg.Hosts {
 			ip := net.ParseIP(ipStr)
