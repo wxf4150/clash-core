@@ -69,6 +69,8 @@ func (u *URLTest) proxies(touch bool) []C.Proxy {
 func (u *URLTest) fast(touch bool) C.Proxy {
 	elm, _, shared := u.fastSingle.Do(func() (any, error) {
 		proxies := u.proxies(touch)
+		time.Sleep(5 * time.Second)
+
 		fast := proxies[0]
 		min := fast.LastDelay()
 		fastNotExist := true
@@ -87,6 +89,10 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 				fast = proxy
 				min = delay
 			}
+		}
+		//print all proxy delays for debug
+		for _, proxy := range proxies {
+			log.Debugln("[%s] url-test proxy: %s (delay: %dms, alive: %v)", u.Name(), proxy.Name(), proxy.LastDelay(), proxy.Alive())
 		}
 
 		// tolerance

@@ -28,6 +28,7 @@ type Ssh struct {
 	pass           string
 	privateKeyPath string
 	sshConfig      *ssh.ClientConfig
+	proxyJump      string
 
 	// Connection multiplexing
 	clientMu  sync.Mutex
@@ -37,13 +38,18 @@ type Ssh struct {
 
 type SshOption struct {
 	BasicOption
-	Name         string `proxy:"name"`
-	Server       string `proxy:"server"`
-	Port         int    `proxy:"port,omitempty"`
-	UserName     string `proxy:"username,omitempty"`
-	Password     string `proxy:"password,omitempty"`
-	PrivateKey   string `proxy:"privatekey,omitempty"`
-	UseSSHConfig bool   `proxy:"use-ssh-config,omitempty"`
+	Name       string `proxy:"name"`
+	Server     string `proxy:"server"`
+	Port       int    `proxy:"port,omitempty"`
+	UserName   string `proxy:"username,omitempty"`
+	Password   string `proxy:"password,omitempty"`
+	PrivateKey string `proxy:"privatekey,omitempty"`
+
+	//UseSSHConfig will always be true
+	//clash yaml configFile is first parsed, if clash config not set, use ssh config file
+	//UseSSHConfig bool   `proxy:"use-ssh-config,omitempty"`
+
+	ProxyJump string `proxy:"proxy-jump,omitempty"`
 }
 
 type sshConn struct {
@@ -73,7 +79,7 @@ func (c *sshConn) Close() error {
 func (c *sshConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if err != nil && err != io.EOF {
-		c.Close()
+		_ = c.Close()
 	}
 	return n, err
 }
@@ -81,7 +87,7 @@ func (c *sshConn) Read(b []byte) (int, error) {
 func (c *sshConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if err != nil && err != io.EOF {
-		c.Close()
+		_ = c.Close()
 	}
 	return n, err
 }
@@ -94,32 +100,125 @@ func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*s
 	// Check if existing client is still alive
 	if ss.client != nil {
 		return ss.client, nil
-
-		// Simple check: try to open a session
-		//sess, err := ss.client.NewSession()
-		//if err == nil {
-		//	sess.Close()
-		//	return ss.client, nil
-		//}
-
-		// 发送 keepalive 全局请求，错误表示连接不可用
-		//_, err := ss.client.SendRequest("keepalive@openssh.com", true, nil)
-		//if err == nil {
-		//	return ss.client, nil
-		//}
-
-		// Connection is dead, close and recreate
-		//log.Infoln("[SSH] %s connection lost, reconnecting...", ss.addr)
-		//ss.client.Close()
-		//if ss.underConn != nil {
-		//	ss.underConn.Close()
-		//}
-		//ss.client = nil
-		//ss.underConn = nil
 	}
 	log.Infoln("[SSH] %s@%s connecting...", ss.sshConfig.User, ss.addr)
 
-	// Create new SSH connection
+	// If ProxyJump configured, build jump chain and dial through jumps
+	if ss.proxyJump != "" {
+		// Parse proxy jump list (comma separated)
+		parts := strings.Split(ss.proxyJump, ",")
+		var jumps []JumpHost
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+
+			// support user@host:port or host:port or host
+			var jumpUser string
+			hostport := p
+			if strings.Contains(p, "@") {
+				idx := strings.Index(p, "@")
+				jumpUser = p[:idx]
+				hostport = p[idx+1:]
+			}
+
+			// prepare per-jump ssh config; inherit auth/hostkey/timeout from ss.sshConfig
+			// Extract host portion (without port) for ssh_config lookup
+			hostOnly := hostport
+			if h, _, err := net.SplitHostPort(hostOnly); err == nil {
+				hostOnly = h
+			}
+
+			// Try to load per-jump settings from ~/.ssh/config (clash YAML still has priority)
+			var tmpOpt SshOption
+			// Load values for the host pattern
+			if o, err := loadSSHConfigForHost(hostOnly); err == nil {
+				tmpOpt = o
+			}
+
+			// determine user: jumpUser > tmpOpt.UserName > main ss.sshConfig.User
+			user := ss.sshConfig.User
+			if tmpOpt.UserName != "" {
+				user = tmpOpt.UserName
+			}
+			if jumpUser != "" {
+				user = jumpUser
+			}
+
+			// build per-jump auth methods: prefer tmpOpt (from ssh_config) if present
+			var authMethods []ssh.AuthMethod
+			if tmpOpt.PrivateKey != "" {
+				for _, keyPath := range strings.Split(tmpOpt.PrivateKey, ",") {
+					if strings.HasPrefix(keyPath, "~/") {
+						home, err := os.UserHomeDir()
+						if err == nil {
+							keyPath = filepath.Join(home, keyPath[2:])
+						}
+					}
+					if key, err := os.ReadFile(keyPath); err == nil {
+						if signer, err := ssh.ParsePrivateKey(key); err == nil {
+							authMethods = append(authMethods, ssh.PublicKeys(signer))
+						}
+					}
+				}
+			}
+			if tmpOpt.Password != "" {
+				authMethods = append(authMethods, ssh.Password(tmpOpt.Password))
+			}
+			// fallback to main auth if no per-jump auth found
+			if len(authMethods) == 0 {
+				authMethods = ss.sshConfig.Auth
+			}
+
+			h := hostport
+			// If ssh_config provides HostName, use it as the actual host to dial from jump
+			if tmpOpt.Server != "" {
+				// preserve the port from h
+				if _, portPart, err := net.SplitHostPort(h); err == nil {
+					h = net.JoinHostPort(tmpOpt.Server, portPart)
+				} else {
+					// if SplitHostPort failed, just replace host portion (rare)
+					h = net.JoinHostPort(tmpOpt.Server, strconv.Itoa(tmpOpt.Port))
+				}
+			}
+
+			cfg := &ssh.ClientConfig{
+				User:            user,
+				Auth:            authMethods,
+				HostKeyCallback: ss.sshConfig.HostKeyCallback,
+				Timeout:         ss.sshConfig.Timeout,
+			}
+
+			jumps = append(jumps, JumpHost{Addr: h, Config: cfg})
+		}
+
+		// append final target as last jump (use ss.sshConfig for final auth)
+		jumps = append(jumps, JumpHost{Addr: ss.addr, Config: ss.sshConfig})
+
+		client, firstConn, err := dialThroughJumps(ctx, dialer.DialContext, jumps, ss.Base.DialOptions(opts...)...)
+		if err != nil {
+			return nil, fmt.Errorf("ssh dial through proxyjump failed: %w", err)
+		}
+
+		// ensure keepalive on underlying first connection
+		tcpKeepAlive(firstConn)
+
+		ss.client = client
+		ss.underConn = firstConn
+		jumpList := make([]string, len(jumps)-1)
+		for i, j := range jumps[:len(jumps)-1] {
+			jumpList[i] = j.Config.User + "@" + j.Addr
+		}
+		log.Infoln("[SSH] %s@%s connected successfully via proxyjump[%s] (multiplexing enabled)", ss.sshConfig.User, ss.addr, strings.Join(jumpList, " -> "))
+
+		// Start a goroutine to monitor the connection
+		go ss.monitorConnection()
+
+		return client, nil
+	}
+
+	// Default: direct connect to target
 	underConn, err := dialer.DialContext(ctx, "tcp", ss.addr, ss.Base.DialOptions(opts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("ssh %s tcp connect error: %w", ss.addr, err)
@@ -128,7 +227,7 @@ func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*s
 
 	clientConn, chans, reqs, err := ssh.NewClientConn(underConn, ss.addr, ss.sshConfig)
 	if err != nil {
-		underConn.Close()
+		_ = underConn.Close()
 		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)
 	}
 
@@ -155,7 +254,9 @@ func (ss *Ssh) monitorConnection() {
 	}
 
 	// Block until this client connection exits
-	client.Wait()
+	if err := client.Wait(); err != nil {
+		log.Infoln("[SSH] client wait returned error: %v", err)
+	}
 
 	ss.clientMu.Lock()
 	defer ss.clientMu.Unlock()
@@ -165,7 +266,7 @@ func (ss *Ssh) monitorConnection() {
 		log.Infoln("[SSH] %s@%s connection closed, will reconnect on next request", ss.sshConfig.User, ss.addr)
 		ss.client = nil
 		if ss.underConn != nil {
-			ss.underConn.Close()
+			_ = ss.underConn.Close()
 			ss.underConn = nil
 		}
 	}
@@ -210,7 +311,7 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 	remoteAddr := net.JoinHostPort(metadata.String(), metadata.DstPort.String())
 	remoteConn, err := client.Dial("tcp", remoteAddr)
 	if err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, fmt.Errorf("ssh tunnel dial failed: %w", err)
 	}
 
@@ -223,6 +324,9 @@ func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
 
 // ListenPacketContext implements C.ProxyAdapter
 func (ss *Ssh) ListenPacketContext(ctx context.Context, metadata *C.Metadata, opts ...dialer.Option) (C.PacketConn, error) {
+	_ = ctx
+	_ = metadata
+	_ = opts
 	return nil, fmt.Errorf("ssh does not support UDP")
 }
 
@@ -246,11 +350,11 @@ func NewSsh(option SshOption) (*Ssh, error) {
 	}
 
 	// Handle SSH config file if enabled
-	if option.UseSSHConfig {
-		if err := loadSSHConfig(&option, portExplicitlySet); err != nil {
-			return nil, fmt.Errorf("failed to load SSH config: %w", err)
-		}
+	//if option.UseSSHConfig {}
+	if err := loadSSHConfig(&option, portExplicitlySet); err != nil {
+		return nil, fmt.Errorf("failed to load SSH config: %w", err)
 	}
+
 	if sshConfig.User == "" {
 		sshConfig.User = option.UserName
 	}
@@ -260,26 +364,27 @@ func NewSsh(option SshOption) (*Ssh, error) {
 
 	// Try private key authentication first
 	if option.PrivateKey != "" {
-		keyPath := option.PrivateKey
-		if strings.HasPrefix(keyPath, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return nil, fmt.Errorf("failed to get home directory: %w", err)
+		for _, keyPath := range strings.Split(option.PrivateKey, ",") {
+			if strings.HasPrefix(keyPath, "~/") {
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return nil, fmt.Errorf("failed to get home directory: %w", err)
+				}
+				keyPath = filepath.Join(home, keyPath[2:])
 			}
-			keyPath = filepath.Join(home, keyPath[2:])
-		}
 
-		key, err := os.ReadFile(keyPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read private key: %w", err)
-		}
+			key, err := os.ReadFile(keyPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read private key: %w", err)
+			}
 
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse private key: %w", err)
-		}
+			signer, err := ssh.ParsePrivateKey(key)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse private key: %w", err)
+			}
 
-		authMethods = append(authMethods, ssh.PublicKeys(signer))
+			authMethods = append(authMethods, ssh.PublicKeys(signer))
+		}
 	}
 
 	// Add password authentication if provided
@@ -306,6 +411,7 @@ func NewSsh(option SshOption) (*Ssh, error) {
 		pass:           option.Password,
 		privateKeyPath: option.PrivateKey,
 		sshConfig:      sshConfig,
+		proxyJump:      option.ProxyJump,
 	}, nil
 }
 
@@ -329,7 +435,7 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 		// For other errors, return them as they might indicate permission issues
 		return fmt.Errorf("failed to open SSH config: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	cfg, err := ssh_config.Decode(f)
 	if err != nil {
@@ -339,8 +445,13 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	// Get configuration for the specified host
 	host := option.Server
 
+	// Only use values from ~/.ssh/config when the corresponding clash YAML
+	// option is not set. Clash config (provided in SshOption) has priority.
+
 	// Get HostName (the actual server to connect to)
-	// If the key doesn't exist in config, Get returns an error, which we ignore
+	// Only set option.Server from ssh config if it wasn't provided in the clash config.
+	//if option.Server == "" {
+	//}
 	hostname, _ := cfg.Get(host, "HostName")
 	if hostname != "" {
 		option.Server = hostname
@@ -377,16 +488,179 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 			idEd25519Path := filepath.Join(home, ".ssh", "id_ed25519")
 			if _, err := os.Stat(idRsaPath); err == nil {
 				option.PrivateKey = idRsaPath
-			} else if _, err := os.Stat(idEd25519Path); err == nil {
-				option.PrivateKey = idEd25519Path
+			}
+			if _, err := os.Stat(idEd25519Path); err == nil {
+				if option.PrivateKey != "" {
+					option.PrivateKey += "," + idEd25519Path
+				} else {
+					option.PrivateKey = idEd25519Path
+				}
 			}
 		}
 	}
-
+	if option.ProxyJump == "" {
+		proxyJump, _ := cfg.Get(host, "ProxyJump")
+		if proxyJump != "" {
+			option.ProxyJump = proxyJump
+		}
+	}
+	if option.Password == "" {
+		password, _ := cfg.Get(host, "Password")
+		if password != "" {
+			option.Password = password
+		}
+	}
 	// Set defaults if not configured
 	if option.Port == 0 {
 		option.Port = defaultSSHPort
 	}
 
 	return nil
+}
+
+// loadSSHConfigForHost loads SSH configuration for a specific host pattern from ~/.ssh/config
+// It always queries the provided host pattern in ssh_config and returns populated SshOption fields
+func loadSSHConfigForHost(host string) (SshOption, error) {
+	var opt SshOption
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return opt, err
+	}
+
+	configPath := filepath.Join(home, ".ssh", "config")
+	f, err := os.Open(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return opt, nil
+		}
+		return opt, fmt.Errorf("failed to open SSH config: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	cfg, err := ssh_config.Decode(f)
+	if err != nil {
+		return opt, fmt.Errorf("failed to parse SSH config: %w", err)
+	}
+
+	opt.Name = host
+
+	// HostName
+	if hn, _ := cfg.Get(host, "HostName"); hn != "" {
+		opt.Server = hn
+	}
+	if opt.Server == "" {
+		opt.Server = host
+	}
+
+	// Port
+	if p, _ := cfg.Get(host, "Port"); p != "" {
+		if port, err := strconv.Atoi(p); err == nil {
+			opt.Port = port
+		}
+	}
+	// User
+	if users, _ := cfg.GetAll(host, "User"); len(users) > 0 {
+		opt.UserName = users[0]
+	}
+	// IdentityFile
+	if idf, _ := cfg.Get(host, "IdentityFile"); idf != "" {
+		opt.PrivateKey = idf
+	}
+	// ProxyJump
+	if pj, _ := cfg.Get(host, "ProxyJump"); pj != "" {
+		opt.ProxyJump = pj
+	}
+	// Password (less common in ssh_config but supported earlier)
+	if pw, _ := cfg.Get(host, "Password"); pw != "" {
+		opt.Password = pw
+	}
+	// Get IdentityFile if not already set
+	if opt.PrivateKey == "" {
+		//default to ~/.ssh/id_rsa or ~/.ssh/id_ed25519 ; use the first  exists file
+		idRsaPath := filepath.Join(home, ".ssh", "id_rsa")
+		idEd25519Path := filepath.Join(home, ".ssh", "id_ed25519")
+		if _, err := os.Stat(idRsaPath); err == nil {
+			opt.PrivateKey = idRsaPath
+		}
+		if _, err := os.Stat(idEd25519Path); err == nil {
+			if opt.PrivateKey == "" {
+				opt.PrivateKey = idEd25519Path
+			} else {
+				opt.PrivateKey += "," + idEd25519Path
+			}
+
+		}
+
+	}
+
+	if opt.Port == 0 {
+		opt.Port = defaultSSHPort
+	}
+
+	return opt, nil
+}
+
+// JumpHost 表示一跳的目标（host:port）和该跳的 ssh.Config
+type JumpHost struct {
+	Addr   string
+	Config *ssh.ClientConfig
+}
+
+// dialThroughJumps 建立通过若干跳的 SSH 链路。
+// dialerFunc 用于建立到首跳的 TCP 连接（可以传入 dialer.DialContext）。
+// 返回最终的 *ssh.Client 和首跳的底层 net.Conn（用于关闭整个链路）。
+func dialThroughJumps(
+	ctx context.Context,
+	dialerFunc func(context.Context, string, string, ...dialer.Option) (net.Conn, error),
+	jumps []JumpHost,
+	opts ...dialer.Option,
+) (*ssh.Client, net.Conn, error) {
+	if len(jumps) == 0 {
+		return nil, nil, fmt.Errorf("no jumps provided")
+	}
+
+	// 首跳：直接 TCP 连接
+	firstConn, err := dialerFunc(ctx, "tcp", jumps[0].Addr, opts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tcp dial to %s failed: %w", jumps[0].Addr, err)
+	}
+
+	// set keepalive on first connection
+	tcpKeepAlive(firstConn)
+
+	// 将首跳的 TCP conn 升级为 SSH client（client1）
+	clientConn, chans, reqs, err := ssh.NewClientConn(firstConn, jumps[0].Addr, jumps[0].Config)
+	if err != nil {
+		_ = firstConn.Close()
+		return nil, nil, fmt.Errorf("ssh handshake to %s@%s failed: %w", jumps[0].Config.User, jumps[0].Addr, err)
+	} else {
+		log.Infoln("ssh handshake to %s@%s success", jumps[0].Config.User, jumps[0].Addr)
+	}
+	client := ssh.NewClient(clientConn, chans, reqs)
+
+	// 对后续每一跳，用上一级 client.Dial 得到的 net.Conn 再做 NewClientConn
+	for i := 1; i < len(jumps); i++ {
+		nextAddr := jumps[i].Addr
+		nextTCP, err := client.Dial("tcp", nextAddr)
+		if err != nil {
+			_ = client.Close()
+			_ = firstConn.Close()
+			return nil, nil, fmt.Errorf("dial from jump %d to %s failed: %w", i-1, nextAddr, err)
+		}
+
+		cconn, cchans, creqs, err := ssh.NewClientConn(nextTCP, nextAddr, jumps[i].Config)
+		if err != nil {
+			_ = nextTCP.Close()
+			_ = client.Close()
+			_ = firstConn.Close()
+			return nil, nil, fmt.Errorf("ssh handshake to %s@%s failed: %w", jumps[i].Config.User, nextAddr, err)
+		}
+		// 用新的 client 替换上一级 client（注意：上一级 client 需要 Close 得到合适的资源回收，
+		// 这里可选择在失败场景才 Close，上层根据需要处理旧 client 的 Close）
+		client = ssh.NewClient(cconn, cchans, creqs)
+	}
+
+	// 返回最终 client 和首跳的底层 TCP 连接（用于后续关闭）
+	return client, firstConn, nil
 }
