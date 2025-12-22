@@ -181,8 +181,9 @@ type sshTunnelConn struct {
 
 // StreamConn implements C.ProxyAdapter
 func (ss *Ssh) StreamConn(c net.Conn, metadata *C.Metadata) (net.Conn, error) {
-	// This method is kept for compatibility but not used with multiplexing
-	// Create a temporary SSH client for this connection
+	// This method is kept for compatibility with the ProxyAdapter interface,
+	// but is not used in normal operation since DialContext uses multiplexing.
+	// This creates a temporary non-multiplexed SSH client for this single connection.
 	clientConn, chans, reqs, err := ssh.NewClientConn(c, ss.addr, ss.sshConfig)
 	if err != nil {
 		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)

@@ -571,7 +571,8 @@ func parseHosts(cfg *RawConfig) (*trie.DomainTrie, error) {
 		}
 	}
 
-	// Config hosts override system hosts
+	// User-configured hosts in Clash config take precedence over system hosts
+	// This allows overriding system hosts file entries for specific domains
 	if len(cfg.Hosts) != 0 {
 		for domain, ipStr := range cfg.Hosts {
 			ip := net.ParseIP(ipStr)
