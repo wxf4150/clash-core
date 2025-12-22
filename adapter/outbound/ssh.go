@@ -93,9 +93,10 @@ func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*s
 	
 	// Check if existing client is still alive
 	if ss.client != nil {
-		// Try to send a keepalive to check if connection is alive
-		_, _, err := ss.client.SendRequest("keepalive@openssh.com", true, nil)
+		// Simple check: try to open a session
+		sess, err := ss.client.NewSession()
 		if err == nil {
+			sess.Close()
 			return ss.client, nil
 		}
 		// Connection is dead, close and recreate
