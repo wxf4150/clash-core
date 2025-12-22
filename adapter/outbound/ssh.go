@@ -28,10 +28,10 @@ type Ssh struct {
 	pass           string
 	privateKeyPath string
 	sshConfig      *ssh.ClientConfig
-	
+
 	// Connection multiplexing
-	clientMu sync.Mutex
-	client   *ssh.Client
+	clientMu  sync.Mutex
+	client    *ssh.Client
 	underConn net.Conn
 }
 
@@ -90,63 +90,78 @@ func (c *sshConn) Write(b []byte) (int, error) {
 func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*ssh.Client, error) {
 	ss.clientMu.Lock()
 	defer ss.clientMu.Unlock()
-	
+
 	// Check if existing client is still alive
 	if ss.client != nil {
+		return ss.client, nil
+
 		// Simple check: try to open a session
-		sess, err := ss.client.NewSession()
-		if err == nil {
-			sess.Close()
-			return ss.client, nil
-		}
+		//sess, err := ss.client.NewSession()
+		//if err == nil {
+		//	sess.Close()
+		//	return ss.client, nil
+		//}
+
+		// 发送 keepalive 全局请求，错误表示连接不可用
+		//_, err := ss.client.SendRequest("keepalive@openssh.com", true, nil)
+		//if err == nil {
+		//	return ss.client, nil
+		//}
+
 		// Connection is dead, close and recreate
-		log.Infoln("[SSH] %s connection lost, reconnecting...", ss.addr)
-		ss.client.Close()
-		if ss.underConn != nil {
-			ss.underConn.Close()
-		}
-		ss.client = nil
-		ss.underConn = nil
+		//log.Infoln("[SSH] %s connection lost, reconnecting...", ss.addr)
+		//ss.client.Close()
+		//if ss.underConn != nil {
+		//	ss.underConn.Close()
+		//}
+		//ss.client = nil
+		//ss.underConn = nil
 	}
-	
+	log.Infoln("[SSH] %s@%s connecting...", ss.sshConfig.User, ss.addr)
+
 	// Create new SSH connection
 	underConn, err := dialer.DialContext(ctx, "tcp", ss.addr, ss.Base.DialOptions(opts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("ssh %s tcp connect error: %w", ss.addr, err)
 	}
 	tcpKeepAlive(underConn)
-	
+
 	clientConn, chans, reqs, err := ssh.NewClientConn(underConn, ss.addr, ss.sshConfig)
 	if err != nil {
 		underConn.Close()
 		return nil, fmt.Errorf("ssh connection %s@%s failed: %w", ss.sshConfig.User, ss.addr, err)
 	}
-	
+
 	client := ssh.NewClient(clientConn, chans, reqs)
 	ss.client = client
 	ss.underConn = underConn
-	
+
 	log.Infoln("[SSH] %s@%s connected successfully (multiplexing enabled)", ss.sshConfig.User, ss.addr)
-	
+
 	// Start a goroutine to monitor the connection
 	go ss.monitorConnection()
-	
+
 	return client, nil
 }
 
-// monitorConnection monitors the SSH connection and logs when it disconnects
+// monitorConnection monitors the SSH connection and clears it only if still the same client.
 func (ss *Ssh) monitorConnection() {
-	if ss.client == nil {
+	ss.clientMu.Lock()
+	client := ss.client
+	ss.clientMu.Unlock()
+
+	if client == nil {
 		return
 	}
-	
-	// Wait for the connection to close
-	ss.client.Wait()
-	
+
+	// Block until this client connection exits
+	client.Wait()
+
 	ss.clientMu.Lock()
 	defer ss.clientMu.Unlock()
-	
-	if ss.client != nil {
+
+	// Only clear if ss.client is still the same client we waited on
+	if ss.client == client {
 		log.Infoln("[SSH] %s@%s connection closed, will reconnect on next request", ss.sshConfig.User, ss.addr)
 		ss.client = nil
 		if ss.underConn != nil {
@@ -163,14 +178,14 @@ func (ss *Ssh) DialContext(ctx context.Context, metadata *C.Metadata, opts ...di
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Dial to the target through SSH tunnel
 	remoteAddr := net.JoinHostPort(metadata.String(), metadata.DstPort.String())
 	remoteConn, err := client.Dial("tcp", remoteAddr)
 	if err != nil {
 		return nil, fmt.Errorf("ssh tunnel dial to %s failed: %w", remoteAddr, err)
 	}
-	
+
 	return NewConn(&sshTunnelConn{Conn: remoteConn}, ss), nil
 }
 
@@ -322,7 +337,7 @@ func loadSSHConfig(option *SshOption, portExplicitlySet bool) error {
 	}
 
 	// Get configuration for the specified host
-	host := option.Name
+	host := option.Server
 
 	// Get HostName (the actual server to connect to)
 	// If the key doesn't exist in config, Get returns an error, which we ignore
