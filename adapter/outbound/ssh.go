@@ -100,7 +100,7 @@ func (ss *Ssh) getOrCreateClient(ctx context.Context, opts ...dialer.Option) (*s
 	if ss.client != nil {
 		return ss.client, nil
 	}
-	log.Infoln("[SSH] %s@%s connecting...", ss.sshConfig.User, ss.addr)
+	log.Infoln("[SSH] %s@%s connecting...", ss.sshConfig.User, ss.name)
 
 	// If ProxyJump configured, build jump chain and dial through jumps
 	if ss.proxyJump != "" {
