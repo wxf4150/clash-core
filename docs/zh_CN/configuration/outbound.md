@@ -345,7 +345,7 @@ Clash 内置了对流行协议 Trojan 的支持:
 
 ### SSH
 
-Clash 支持 SSH 作为代理协议。SSH 代理使用 SSH 隧道来转发流量。它支持密码和私钥认证，并且可以自动从 `~/.ssh/config` 加载配置。
+Clash 支持 SSH 作为代理协议。SSH 代理使用 SSH 隧道来转发流量。它支持密码和私钥认证、自动读取 `~/.ssh/config`、多跳（`proxy-jump`）以及连接复用（multiplexing）。
 
 ::: tip
 SSH 代理不支持 UDP 流量。仅支持通过 SSH 隧道的 TCP 连接。
@@ -375,56 +375,46 @@ SSH 代理不支持 UDP 流量。仅支持通过 SSH 隧道的 TCP 连接。
   privatekey: ~/.ssh/id_rsa
 ```
 
-```yaml [SSH配置文件]
-# 这将从 ~/.ssh/config 加载与服务器主机名匹配的配置
+```yaml [多私钥]
 - name: "ssh"
   type: ssh
-  # interface-name: eth0
-  # routing-mark: 1234
-  server: myhost  # 匹配 ~/.ssh/config 中的 Host 条目
-  use-ssh-config: true
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa,~/.ssh/id_ed25519
+```
+
+```yaml [ProxyJump]
+- name: "ssh-via-jump"
+  type: ssh
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa
+  proxy-jump: jump-user@jump.example.com:22,another-jump.example.com
 ```
 
 :::
 
-**SSH 配置文件支持**
+SSH 配置文件支持
 
-当设置 `use-ssh-config: true` 时，Clash 将使用 `github.com/kevinburke/ssh_config` 库解析 `~/.ssh/config` 并应用与指定服务器匹配的配置。这提供了完整的 SSH 配置文件兼容性，包括对多个主机配置、通配符和模式匹配的支持。
+Clash 会在配置 SSH 代理时自动尝试读取并解析 `~/.ssh/config`（使用 github.com/kevinburke/ssh_config）。只有当 Clash YAML 中未设置对应字段时，才会使用 `~/.ssh/config` 的值；Clash YAML 优先。没有 `use-ssh-config` 布尔标志 — 如果文件存在，加载是自动的。
 
-支持以下 SSH 配置选项：
+当前实现支持下列 ssh_config 指令用于填充缺失值：
+- `Host`（匹配模式）
+- `HostName`（实际主机名）
+- `Port`
+- `User`
+- `IdentityFile`（一个或多个私钥路径）
+- `ProxyJump`（每主机的跳板）
+- `Password`（如果存在）
 
-- `Host`: 主机名的匹配模式（支持通配符和模式匹配）
-- `HostName`: 要连接的实际主机名
-- `Port`: SSH 服务器端口
-- `User`: 用于认证的用户名
-- `IdentityFile`: 私钥文件路径
-
-包含多个主机的 `~/.ssh/config` 示例：
-
-```
-Host server1
-    HostName srv1.example.com
-    Port 2222
-    User user1
-    IdentityFile ~/.ssh/id_server1
-
-Host server2
-    HostName srv2.example.com
-    Port 22
-    User user2
-    IdentityFile ~/.ssh/id_server2
-
-Host myhost
-    HostName server.example.com
-    Port 22
-    User username
-    IdentityFile ~/.ssh/id_rsa
-
-Host *
-    ServerAliveInterval 60
-```
-
-通过此配置，您可以在代理配置中通过 `Host` 名称引用任何主机。
+说明：
+- `privatekey` 支持逗号分隔的多个路径，且支持 `~/` 展开到用户主目录。
+- 若未指定私钥，Clash 会回退到 `~/.ssh/id_rsa` 和 `~/.ssh/id_ed25519`，并使用第一个存在的文件。
+- `proxy-jump` 支持逗号分隔的多跳，每一项可为 `user@host:port`、`host:port` 或 `host`。Clash 会为每一跳尝试加载 per-jump ssh_config 设置（User、IdentityFile、HostName、Port）。
+- Clash 对每个 SSH 代理会建立并复用一个持久化的 SSH client（多路复用），出错时会自动重连。
+- 默认关闭主机密钥验证（ssh InsecureIgnoreHostKey），这存在安全风险；在有安全要求时，请以其他方式验证主机，或修改代码启用主机密钥验证。
 
 ## Proxy Groups 策略组
 

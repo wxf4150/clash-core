@@ -348,7 +348,7 @@ Clash has built support for the popular protocol Trojan:
 
 ### SSH
 
-Clash supports SSH as a proxy protocol. SSH proxy uses SSH tunneling to forward traffic through an SSH server. It supports both password and private key authentication, and can automatically load configuration from `~/.ssh/config`.
+Clash supports SSH as a proxy protocol. SSH proxy uses SSH tunneling to forward traffic through an SSH server. It supports password and private key authentication, automatic `~/.ssh/config` consultation, multi-hop (`proxy-jump`), and connection multiplexing.
 
 ::: tip
 SSH proxy does not support UDP traffic. Only TCP connections are supported through SSH tunneling.
@@ -378,57 +378,46 @@ SSH proxy does not support UDP traffic. Only TCP connections are supported throu
   privatekey: ~/.ssh/id_rsa
 ```
 
-```yaml [ssh-config]
-# This will load configuration from ~/.ssh/config
-# matching the server hostname
+```yaml [multiple-private-keys]
 - name: "ssh"
   type: ssh
-  # interface-name: eth0
-  # routing-mark: 1234
-  server: myhost  # matches Host entry in ~/.ssh/config
-  use-ssh-config: true
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa,~/.ssh/id_ed25519
+```
+
+```yaml [proxy-jump]
+- name: "ssh-via-jump"
+  type: ssh
+  server: server
+  port: 22
+  username: user
+  privatekey: ~/.ssh/id_rsa
+  proxy-jump: jump-user@jump.example.com:22,another-jump.example.com
 ```
 
 :::
 
-**SSH Configuration File Support**
+SSH Configuration File Support
 
-When `use-ssh-config: true` is set, Clash will parse `~/.ssh/config` using the `github.com/kevinburke/ssh_config` library and apply matching configuration for the specified server. This provides full SSH config file compatibility, including support for multiple host configurations, wildcards, and pattern matching.
+Clash will automatically attempt to read and parse `~/.ssh/config` (using github.com/kevinburke/ssh_config) when an SSH proxy is configured. Values from `~/.ssh/config` are used only when the corresponding field is not set in the Clash YAML; Clash YAML has priority. There is no `use-ssh-config` boolean flag — loading is automatic if the file exists.
 
-The following SSH config options are supported:
+Supported ssh_config options that may be used to fill missing fields:
+- `Host` (match pattern)
+- `HostName` (actual host)
+- `Port`
+- `User`
+- `IdentityFile` (one or more identity files)
+- `ProxyJump` (per-host jump hosts)
+- `Password` (if present)
 
-- `Host`: Match pattern for the hostname (supports wildcards and patterns)
-- `HostName`: The actual hostname to connect to
-- `Port`: SSH server port
-- `User`: Username for authentication
-- `IdentityFile`: Path to private key file
-
-Example `~/.ssh/config` with multiple hosts:
-
-```
-Host server1
-    HostName srv1.example.com
-    Port 2222
-    User user1
-    IdentityFile ~/.ssh/id_server1
-
-Host server2
-    HostName srv2.example.com
-    Port 22
-    User user2
-    IdentityFile ~/.ssh/id_server2
-
-Host myhost
-    HostName server.example.com
-    Port 22
-    User username
-    IdentityFile ~/.ssh/id_rsa
-
-Host *
-    ServerAliveInterval 60
-```
-
-With this config, you can reference any host by its `Host` name in the proxy configuration.
+Notes:
+- `privatekey` supports comma-separated paths and `~/` expansion to the user's home directory.
+- If no identity file is provided, Clash will check for `~/.ssh/id_rsa` and `~/.ssh/id_ed25519` and use the first existing file(s).
+- `proxy-jump` can be a comma-separated list. Each entry may be `user@host:port`, `host:port`, or `host`. Clash will try to load per-jump ssh_config settings (User, IdentityFile, HostName, Port) for each jump host and use them when available.
+- Clash maintains a persistent SSH client per configured SSH proxy (multiplexing) to reuse connections; it will reconnect automatically if the client dies.
+- Host key verification is disabled by default (ssh.InsecureIgnoreHostKey). This is insecure; consider the security implications.
 
 ## Proxy Groups
 

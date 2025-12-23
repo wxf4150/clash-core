@@ -45,9 +45,8 @@ type SshOption struct {
 	Password   string `proxy:"password,omitempty"`
 	PrivateKey string `proxy:"privatekey,omitempty"`
 
-	//UseSSHConfig will always be true
-	//clash yaml configFile is first parsed, if clash config not set, use ssh config file
-	//UseSSHConfig bool   `proxy:"use-ssh-config,omitempty"`
+	// ~/.ssh/config is read automatically (when present) by loadSSHConfig.
+	// Clash YAML has priority over ssh_config values for any fields.
 
 	ProxyJump string `proxy:"proxy-jump,omitempty"`
 }
@@ -623,7 +622,7 @@ func dialThroughJumps(
 	// 首跳：直接 TCP 连接
 	firstConn, err := dialerFunc(ctx, "tcp", jumps[0].Addr, opts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tcp dial to %s failed: %w", jumps[0].Addr, err)
+		return nil, nil, fmt.Errorf("jump: tcp dial to %s failed: %w", jumps[0].Addr, err)
 	}
 
 	// set keepalive on first connection
@@ -633,9 +632,9 @@ func dialThroughJumps(
 	clientConn, chans, reqs, err := ssh.NewClientConn(firstConn, jumps[0].Addr, jumps[0].Config)
 	if err != nil {
 		_ = firstConn.Close()
-		return nil, nil, fmt.Errorf("ssh handshake to %s@%s failed: %w", jumps[0].Config.User, jumps[0].Addr, err)
+		return nil, nil, fmt.Errorf("jump: ssh handshake to %s@%s failed: %w", jumps[0].Config.User, jumps[0].Addr, err)
 	} else {
-		log.Infoln("ssh handshake to %s@%s success", jumps[0].Config.User, jumps[0].Addr)
+		log.Infoln("jump: ssh handshake to %s@%s success", jumps[0].Config.User, jumps[0].Addr)
 	}
 	client := ssh.NewClient(clientConn, chans, reqs)
 
@@ -646,7 +645,7 @@ func dialThroughJumps(
 		if err != nil {
 			_ = client.Close()
 			_ = firstConn.Close()
-			return nil, nil, fmt.Errorf("dial from jump %d to %s failed: %w", i-1, nextAddr, err)
+			return nil, nil, fmt.Errorf("jump: dial from jump %d to %s failed: %w", i-1, nextAddr, err)
 		}
 
 		cconn, cchans, creqs, err := ssh.NewClientConn(nextTCP, nextAddr, jumps[i].Config)
@@ -654,7 +653,7 @@ func dialThroughJumps(
 			_ = nextTCP.Close()
 			_ = client.Close()
 			_ = firstConn.Close()
-			return nil, nil, fmt.Errorf("ssh handshake to %s@%s failed: %w", jumps[i].Config.User, nextAddr, err)
+			return nil, nil, fmt.Errorf("jump: ssh handshake to %s@%s failed: %w", jumps[i].Config.User, nextAddr, err)
 		}
 		// 用新的 client 替换上一级 client（注意：上一级 client 需要 Close 得到合适的资源回收，
 		// 这里可选择在失败场景才 Close，上层根据需要处理旧 client 的 Close）
