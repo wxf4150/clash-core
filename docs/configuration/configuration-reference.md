@@ -317,31 +317,16 @@ proxies:
     #   - http/1.1
     # skip-cert-verify: true
 
-  - name: trojan-grpc
+  # SSH
+  - name: "ssh"
+    type: ssh
     server: server
-    port: 443
-    type: trojan
-    password: "example"
-    network: grpc
-    sni: example.com
-    # skip-cert-verify: true
-    udp: true
-    grpc-opts:
-      grpc-service-name: "example"
-
-  - name: trojan-ws
-    server: server
-    port: 443
-    type: trojan
-    password: "example"
-    network: ws
-    sni: example.com
-    # skip-cert-verify: true
-    udp: true
-    # ws-opts:
-      # path: /path
-      # headers:
-      #   Host: example.com
+    port: 22
+    username: user
+    # Provide either password or privatekey (or both)
+    privatekey: ~/.ssh/id_rsa,~/.ssh/id_ed25519
+    # Optional multi-hop jump hosts (comma-separated, supports user@host:port)
+    # proxy-jump: jump-user@jump.example.com:22,another-jump.example.com
 
   # ShadowsocksR
   # The supported ciphers (encryption methods): all stream ciphers in ss
@@ -479,4 +464,4 @@ rules:
   - SRC-PORT,7777,DIRECT
   - RULE-SET,apple,REJECT # Premium only
   - MATCH,auto
-```
+````

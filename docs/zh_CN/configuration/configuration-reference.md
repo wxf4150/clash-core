@@ -307,46 +307,30 @@ proxies:
     port: 443
     password: yourpsk
     # udp: true
-    # sni: example.com # aka 服务器名称
+    # sni: example.com # aka server name
     # alpn:
     #   - h2
     #   - http/1.1
     # skip-cert-verify: true
 
-  - name: trojan-grpc
+  # SSH
+  - name: "ssh"
+    type: ssh
     server: server
-    port: 443
-    type: trojan
-    password: "example"
-    network: grpc
-    sni: example.com
-    # skip-cert-verify: true
-    udp: true
-    grpc-opts:
-      grpc-service-name: "example"
-
-  - name: trojan-ws
-    server: server
-    port: 443
-    type: trojan
-    password: "example"
-    network: ws
-    sni: example.com
-    # skip-cert-verify: true
-    udp: true
-    # ws-opts:
-      # path: /path
-      # headers:
-      #   Host: example.com
+    port: 22
+    username: user
+    # 提供 password 或 privatekey (可同时提供)
+    privatekey: ~/.ssh/id_rsa,~/.ssh/id_ed25519
+    # 可选的多跳跳板主机 (逗号分隔, 支持 user@host:port)
+    # proxy-jump: jump-user@jump.example.com:22,another-jump.example.com
 
   # ShadowsocksR
-  # 支持的加密方法: ss 中的所有流加密方法
-  # 支持的混淆方式:
-  #   plain http_simple http_post
-  #   random_head tls1.2_ticket_auth tls1.2_ticket_fastauth
+  # 支持的加密方法:
+  #   aes-128-cfb aes-192-cfb aes-256-cfb rc4-md5 chacha20-ietf xchacha20
+  # 支持的混淆方法:
+  #   plain http_simple http_post random_head tls1.2_ticket_auth tls1.2_ticket_fastauth
   # 支持的协议:
-  #   origin auth_sha1_v4 auth_aes128_md5
-  #   auth_aes128_sha1 auth_chain_a auth_chain_b
+  #   origin auth_sha1_v4 auth_aes128_md5 auth_aes128_sha1 auth_chain_a auth_chain_b
   - name: "ssr"
     type: ssr
     server: server
@@ -474,4 +458,4 @@ rules:
   - SRC-PORT,7777,DIRECT
   - RULE-SET,apple,REJECT # 仅 Premium 版本支持
   - MATCH,auto
-```
+````

@@ -22,12 +22,13 @@ type HealthCheckOption struct {
 }
 
 type HealthCheck struct {
-	url       string
-	proxies   []C.Proxy
-	interval  uint
-	lazy      bool
-	lastTouch *atomic.Int64
-	done      chan struct{}
+	url          string
+	proxies      []C.Proxy
+	interval     uint
+	lazy         bool
+	lastTouch    *atomic.Int64
+	done         chan struct{}
+	lastBestName string
 }
 
 func (hc *HealthCheck) process() {
@@ -72,7 +73,7 @@ func (hc *HealthCheck) checkAll() {
 }
 
 func (hc *HealthCheck) check(proxies []C.Proxy) {
-	log.Infoln("[Health Check] testing %d proxies", len(proxies))
+	log.Infoln("[Health Check] url-test started: testing %d proxies", len(proxies))
 	b, _ := batch.New(context.Background(), batch.WithConcurrencyNum(10))
 	for _, proxy := range proxies {
 		p := proxy
@@ -84,6 +85,40 @@ func (hc *HealthCheck) check(proxies []C.Proxy) {
 		})
 	}
 	b.Wait()
+	
+	// Find the best proxy (lowest delay among alive proxies)
+	var bestProxy C.Proxy
+	var minDelay uint16 = 0xffff
+	for _, proxy := range proxies {
+		if proxy.Alive() {
+			delay := proxy.LastDelay()
+			if delay < minDelay {
+				minDelay = delay
+				bestProxy = proxy
+			}
+		}
+	}
+	
+	if bestProxy != nil {
+		bestName := bestProxy.Name()
+		if hc.lastBestName == "" {
+			// First time, just report the best proxy
+			log.Infoln("[Health Check] url-test completed: finished testing %d proxies, best: %s (delay: %dms)", 
+				len(proxies), bestName, bestProxy.LastDelay())
+		} else if hc.lastBestName != bestName {
+			// Best proxy changed
+			log.Infoln("[Health Check] url-test completed: finished testing %d proxies, best: %s (delay: %dms), switched from: %s", 
+				len(proxies), bestName, bestProxy.LastDelay(), hc.lastBestName)
+		} else {
+			// Best proxy unchanged
+			log.Infoln("[Health Check] url-test completed: finished testing %d proxies, best: %s (delay: %dms), no change", 
+				len(proxies), bestName, bestProxy.LastDelay())
+		}
+		hc.lastBestName = bestName
+	} else {
+		log.Infoln("[Health Check] url-test completed: finished testing %d proxies, no alive proxy found", len(proxies))
+		hc.lastBestName = ""
+	}
 }
 
 func (hc *HealthCheck) close() {

@@ -21,6 +21,7 @@ const (
 	Http
 	Vmess
 	Trojan
+	Ssh
 
 	Relay
 	Selector
@@ -144,6 +145,8 @@ func (at AdapterType) String() string {
 		return "Vmess"
 	case Trojan:
 		return "Trojan"
+	case Ssh:
+		return "Ssh"
 
 	case Relay:
 		return "Relay"
