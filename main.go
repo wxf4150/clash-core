@@ -3,11 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/Dreamacro/clash/config"
 	C "github.com/Dreamacro/clash/constant"
@@ -27,6 +30,9 @@ var (
 	externalUI         string
 	externalController string
 	secret             string
+	// mmdb download flags
+	downloadMMDBFlag bool
+	mmdbURL          string
 )
 
 func init() {
@@ -37,12 +43,125 @@ func init() {
 	flag.StringVar(&secret, "secret", "", "override secret for RESTful API")
 	flag.BoolVar(&version, "v", false, "show current version of clash")
 	flag.BoolVar(&testConfig, "t", false, "test configuration and exit")
+	// mmdb download flags
+	flag.BoolVar(&downloadMMDBFlag, "download-mmdb", false, "download mmdb and exit")
+	flag.StringVar(&mmdbURL, "mmdb-url", "", "mmdb download url override")
 	flag.Parse()
 
 	flagset = map[string]bool{}
 	flag.Visit(func(f *flag.Flag) {
 		flagset[f.Name] = true
 	})
+}
+
+func downloadMMDBWithProgress(url, outPath string) error {
+	if url == "" {
+		// default URL as used in config/initial.go
+		url = "https://cdn.jsdelivr.net/gh/Dreamacro/maxmind-geoip@release/Country.mmdb"
+	}
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	if outPath == "" {
+		outPath = C.Path.MMDB()
+	}
+	tmpPath := outPath + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 32*1024)
+	var downloaded int64
+	start := time.Now()
+	contentLen := resp.ContentLength
+
+	// progress ticker
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	done := make(chan struct{})
+	go func() {
+		var prev int64
+		for {
+			select {
+			case <-ticker.C:
+				delta := downloaded - prev
+				prev = downloaded
+				secs := time.Since(start).Seconds()
+				avg := float64(downloaded) / secs
+				if contentLen > 0 {
+					percent := float64(downloaded) / float64(contentLen) * 100
+					fmt.Printf("\rDownloaded: %d / %d (%.2f%%) | Speed: %s/s | Avg: %s/s",
+						downloaded, contentLen, percent, humanizeBytes(delta), humanizeBytes(int64(avg)))
+				} else {
+					fmt.Printf("\rDownloaded: %d | Speed: %s/s | Avg: %s/s",
+						downloaded, humanizeBytes(delta), humanizeBytes(int64(avg)))
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			wn, werr := f.Write(buf[:n])
+			if werr != nil {
+				return werr
+			}
+			downloaded += int64(wn)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return rerr
+		}
+	}
+
+	// stop progress printer and print final
+	done <- struct{}{}
+	elapsed := time.Since(start).Seconds()
+	avgSpeed := float64(downloaded) / elapsed
+	fmt.Printf("\rDownloaded: %d bytes | Elapsed: %.1fs | Avg speed: %s/s\n", downloaded, elapsed, humanizeBytes(int64(avgSpeed)))
+
+	if err := f.Sync(); err != nil {
+		fmt.Fprintf(os.Stderr, "sync error: %v\n", err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func humanizeBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	d := float64(b)
+	exp := 0
+	for d >= unit && exp < 4 {
+		d /= unit
+		exp++
+	}
+	suffix := []string{"KB", "MB", "GB", "TB"}
+	return fmt.Sprintf("%.2f %s", d, suffix[exp])
 }
 
 func main() {
@@ -98,6 +217,20 @@ func main() {
 
 	if err := hub.Parse(options...); err != nil {
 		log.Fatalln("Parse config error: %s", err.Error())
+	}
+
+	if downloadMMDBFlag {
+		url := mmdbURL
+		if url == "" {
+			// use default URL
+			url = "https://cdn.jsdelivr.net/gh/Dreamacro/maxmind-geoip@release/Country.mmdb"
+		}
+		fmt.Printf("Downloading mmdb from %s...\n", url)
+		if err := downloadMMDBWithProgress(url, ""); err != nil {
+			log.Fatalln("Download mmdb error: %s", err.Error())
+		}
+		fmt.Println("MMDB download completed.")
+		return
 	}
 
 	sigCh := make(chan os.Signal, 1)
