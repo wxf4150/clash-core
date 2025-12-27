@@ -52,6 +52,16 @@ External Controller enables users to control Clash programmatically with the HTT
     - Full Path: `PATCH /configs`
     - Description: Update base configs
 
+- `/configs/reload`
+  - Method: `POST`
+    - Full Path: `POST /configs/reload`
+    - Description: Reload configuration from disk without changing runtime settings
+
+- `/configs/restart`
+  - Method: `POST`
+    - Full Path: `POST /configs/restart`
+    - Description: Restart the application (requires process manager for auto-restart)
+
 ### Proxies
 
 - `/proxies`

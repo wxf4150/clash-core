@@ -234,6 +234,32 @@ func main() {
 	}
 
 	sigCh := make(chan os.Signal, 1)
+	hupCh := make(chan os.Signal, 1)
+	usr1Ch := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	signal.Notify(hupCh, syscall.SIGHUP)
+	signal.Notify(usr1Ch, syscall.SIGUSR1)
+
+	for {
+		select {
+		case <-hupCh:
+			log.Infoln("Received SIGHUP signal, reloading configuration...")
+			if cfg, err := executor.Parse(); err != nil {
+				log.Errorln("Failed to reload configuration: %s", err.Error())
+			} else {
+				executor.ApplyConfig(cfg, false)
+				log.Infoln("Configuration reloaded successfully")
+			}
+		case <-usr1Ch:
+			log.Infoln("Received SIGUSR1 signal, restarting application...")
+			// To restart, we need to re-execute the process
+			// This is a simple approach - stop and let the process manager restart us
+			// For a proper restart, external process managers (systemd, docker, etc.) should be used
+			log.Infoln("Application restart requested. Exiting for process manager to restart...")
+			os.Exit(0)
+		case <-sigCh:
+			log.Infoln("Shutting down...")
+			return
+		}
+	}
 }
