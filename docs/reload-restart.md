@@ -2,7 +2,41 @@
 
 ## Overview
 
-Clash now supports graceful configuration reload and application restart through both signal handling and REST API endpoints.
+Clash now supports graceful configuration reload and application restart through command-line flags, signal handling, and REST API endpoints.
+
+## Command-Line Control
+
+### Reload Configuration
+
+Send reload command to a running clash instance:
+
+```bash
+clash -reload
+```
+
+This will:
+- Read the PID from the PID file (stored in the configuration directory as `clash.pid`)
+- Send SIGHUP signal to the running instance
+- Trigger configuration reload without restarting
+
+### Restart Application
+
+Send restart command to a running clash instance:
+
+```bash
+clash -restart
+```
+
+This will:
+- Read the PID from the PID file
+- Send SIGUSR1 signal to the running instance
+- Trigger application restart (requires process manager)
+
+**Note:** The `-d` flag can be used to specify the configuration directory if needed:
+```bash
+clash -d /path/to/config -reload
+clash -d /path/to/config -restart
+```
 
 ## Signal Handling
 
@@ -105,5 +139,12 @@ services:
 
 ## Use Cases
 
+- **Command-Line Control**: Simple and direct control of running instance
+  ```bash
+  clash -reload   # Quick config reload
+  clash -restart  # Quick restart
+  ```
+
 - **Configuration Reload (SIGHUP or /configs/reload)**: Update rules, proxies, or other settings without interrupting existing connections
+
 - **Application Restart (SIGUSR1 or /configs/restart)**: Full restart when needed (e.g., after binary updates)

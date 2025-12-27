@@ -33,6 +33,9 @@ var (
 	// mmdb download flags
 	downloadMMDBFlag bool
 	mmdbURL          string
+	// control flags
+	reloadFlag  bool
+	restartFlag bool
 )
 
 func init() {
@@ -46,6 +49,9 @@ func init() {
 	// mmdb download flags
 	flag.BoolVar(&downloadMMDBFlag, "download-mmdb", false, "download mmdb and exit")
 	flag.StringVar(&mmdbURL, "mmdb-url", "", "mmdb download url override")
+	// control flags
+	flag.BoolVar(&reloadFlag, "reload", false, "send reload signal to running clash instance")
+	flag.BoolVar(&restartFlag, "restart", false, "send restart signal to running clash instance")
 	flag.Parse()
 
 	flagset = map[string]bool{}
@@ -164,6 +170,40 @@ func humanizeBytes(b int64) string {
 	return fmt.Sprintf("%.2f %s", d, suffix[exp])
 }
 
+func getPIDFile() string {
+	return filepath.Join(C.Path.HomeDir(), "clash.pid")
+}
+
+func writePIDFile() error {
+	pidFile := getPIDFile()
+	pid := os.Getpid()
+	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644)
+}
+
+func readPIDFile() (int, error) {
+	pidFile := getPIDFile()
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	_, err = fmt.Sscanf(string(data), "%d", &pid)
+	return pid, err
+}
+
+func removePIDFile() {
+	pidFile := getPIDFile()
+	os.Remove(pidFile)
+}
+
+func sendSignalToPID(pid int, sig syscall.Signal) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+	return process.Signal(sig)
+}
+
 func main() {
 	maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
 	if version {
@@ -177,6 +217,36 @@ func main() {
 			homeDir = filepath.Join(currentDir, homeDir)
 		}
 		C.SetHomeDir(homeDir)
+	}
+
+	// Handle reload flag
+	if reloadFlag {
+		pid, err := readPIDFile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read PID file: %v\n", err)
+			os.Exit(1)
+		}
+		if err := sendSignalToPID(pid, syscall.SIGHUP); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send reload signal: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Reload signal sent successfully")
+		return
+	}
+
+	// Handle restart flag
+	if restartFlag {
+		pid, err := readPIDFile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read PID file: %v\n", err)
+			os.Exit(1)
+		}
+		if err := sendSignalToPID(pid, syscall.SIGUSR1); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Restart signal sent successfully")
+		return
 	}
 
 	if configFile != "" {
@@ -231,6 +301,13 @@ func main() {
 		}
 		fmt.Println("MMDB download completed.")
 		return
+	}
+
+	// Write PID file for the running instance
+	if err := writePIDFile(); err != nil {
+		log.Warnln("Failed to write PID file:", err.Error())
+	} else {
+		defer removePIDFile()
 	}
 
 	sigCh := make(chan os.Signal, 1)
