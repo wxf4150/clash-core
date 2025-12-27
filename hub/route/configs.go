@@ -19,6 +19,12 @@ import (
 	"github.com/samber/lo"
 )
 
+const (
+	// restartDelay is the time to wait before sending restart signal
+	// to allow HTTP response to be sent to client
+	restartDelay = 100 * time.Millisecond
+)
+
 func configRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", getConfigs)
@@ -146,7 +152,7 @@ func restartApp(w http.ResponseWriter, r *http.Request) {
 	
 	// Give time for response to be sent
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(restartDelay)
 		syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
 	}()
 }
