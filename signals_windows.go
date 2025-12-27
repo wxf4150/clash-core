@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -114,7 +115,7 @@ func spawnDaemon() error {
 	cmd := exec.Command(exe)
 
 	logPath := filepath.Join(os.TempDir(), "clash.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
@@ -132,6 +133,13 @@ func spawnDaemon() error {
 		f.Close()
 		return err
 	}
-
-	return f.Close()
+	fmt.Println("")
+	err = f.Close()
+	if err == nil {
+		fmt.Printf("Spawning background daemon, stdout/stderr -> %s\n", logPath)
+		fmt.Println("Spawned new daemon successfully")
+	} else {
+		log.Fatalln("Failed to spawn daemon:", err.Error())
+	}
+	return err
 }

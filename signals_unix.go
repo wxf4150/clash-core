@@ -60,5 +60,10 @@ func spawnDaemon() error {
 		return err
 	}
 
-	return f.Close()
+	err = f.Close()
+	if err == nil {
+		fmt.Printf("Spawning background daemon, stdout/stderr -> %s\n", logPath)
+		fmt.Println("Spawned new daemon successfully")
+	}
+	return err
 }

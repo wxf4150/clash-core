@@ -37,6 +37,7 @@ var (
 	// control flags
 	reloadFlag  bool
 	restartFlag bool
+	daemonFlag  bool
 )
 
 func init() {
@@ -53,6 +54,7 @@ func init() {
 	// control flags
 	flag.BoolVar(&reloadFlag, "reload", false, "send reload signal to running clash instance")
 	flag.BoolVar(&restartFlag, "restart", false, "send restart signal to running clash instance")
+	flag.BoolVar(&daemonFlag, "daemon", false, "running a clash instance in background")
 	flag.Parse()
 
 	flagset = map[string]bool{}
@@ -260,7 +262,7 @@ func main() {
 		log.Fatalln("Initial configuration directory error: %s", err.Error())
 	}
 
-	if testConfig || reloadFlag || restartFlag {
+	if testConfig || reloadFlag || restartFlag || daemonFlag {
 		if _, err := executor.Parse(); err != nil {
 			log.Errorln(err.Error())
 			fmt.Printf("configuration file %s test failed\n", C.Path.Config())
@@ -269,6 +271,10 @@ func main() {
 		fmt.Printf("configuration file %s test is successful\n", C.Path.Config())
 	}
 	if testConfig {
+		return
+	}
+	if daemonFlag {
+		spawnDaemon()
 		return
 	}
 
@@ -321,13 +327,7 @@ func main() {
 
 		// Spawn a new background daemon after a short delay to allow the current
 		time.Sleep(1500 * time.Millisecond)
-		logPath := filepath.Join(os.TempDir(), "clash.log")
-		fmt.Fprintln(os.Stderr, "Spawning background daemon, stdout/stderr -> %s", logPath)
-		if err := spawnDaemon(); err != nil {
-			log.Errorln("Failed to spawn daemon:", err.Error())
-		} else {
-			fmt.Println("Spawned new daemon successfully")
-		}
+		spawnDaemon()
 		return
 	}
 
