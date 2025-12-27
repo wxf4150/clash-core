@@ -201,7 +201,22 @@ func sendSignalToPID(pid int, sig syscall.Signal) error {
 	if err != nil {
 		return fmt.Errorf("failed to find process: %w", err)
 	}
+	// Try to send signal 0 first to check if process exists
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return fmt.Errorf("process %d does not exist or is not accessible", pid)
+	}
 	return process.Signal(sig)
+}
+
+func sendSignalToRunningInstance(sig syscall.Signal, actionName string) error {
+	pid, err := readPIDFile()
+	if err != nil {
+		return fmt.Errorf("failed to read PID file: %w", err)
+	}
+	if err := sendSignalToPID(pid, sig); err != nil {
+		return fmt.Errorf("failed to send %s signal to process %d: %w", actionName, pid, err)
+	}
+	return nil
 }
 
 func main() {
@@ -211,6 +226,7 @@ func main() {
 		return
 	}
 
+	// Set home directory first so PID file path is correct
 	if homeDir != "" {
 		if !filepath.IsAbs(homeDir) {
 			currentDir, _ := os.Getwd()
@@ -221,12 +237,7 @@ func main() {
 
 	// Handle reload flag
 	if reloadFlag {
-		pid, err := readPIDFile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to read PID file: %v\n", err)
-			os.Exit(1)
-		}
-		if err := sendSignalToPID(pid, syscall.SIGHUP); err != nil {
+		if err := sendSignalToRunningInstance(syscall.SIGHUP, "reload"); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to send reload signal: %v\n", err)
 			os.Exit(1)
 		}
@@ -236,12 +247,7 @@ func main() {
 
 	// Handle restart flag
 	if restartFlag {
-		pid, err := readPIDFile()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to read PID file: %v\n", err)
-			os.Exit(1)
-		}
-		if err := sendSignalToPID(pid, syscall.SIGUSR1); err != nil {
+		if err := sendSignalToRunningInstance(syscall.SIGUSR1, "restart"); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
 			os.Exit(1)
 		}
