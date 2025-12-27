@@ -212,3 +212,18 @@ func NewTrojan(option TrojanOption) (*Trojan, error) {
 
 	return t, nil
 }
+
+// Close releases long-lived resources used by Trojan (like http2 transports)
+func (t *Trojan) Close() error {
+	if t == nil {
+		return nil
+	}
+	if t.transport != nil {
+		t.transport.CloseIdleConnections()
+		t.transport = nil
+	}
+	// clear configs
+	t.gunConfig = nil
+	t.gunTLSConfig = nil
+	return nil
+}

@@ -3,12 +3,15 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
+	"reflect"
 	"runtime"
 	"sync"
 	"time"
 
+	"github.com/Dreamacro/clash/adapter"
 	"github.com/Dreamacro/clash/adapter/inbound"
 	"github.com/Dreamacro/clash/component/nat"
 	P "github.com/Dreamacro/clash/component/process"
@@ -39,6 +42,10 @@ var (
 
 	// experimental feature
 	UDPFallbackMatch = atomic.NewBool(false)
+
+	// CloseOnReplaceSync controls whether UpdateProxies will close old adapters synchronously.
+	// Default is false (asynchronous close in goroutines) to avoid blocking reload.
+	CloseOnReplaceSync = false
 )
 
 func init() {
@@ -77,12 +84,63 @@ func Providers() map[string]provider.ProxyProvider {
 	return providers
 }
 
+// SetCloseOnReplaceSync toggles synchronous close behavior when replacing proxies.
+func SetCloseOnReplaceSync(sync bool) {
+	CloseOnReplaceSync = sync
+}
+
 // UpdateProxies handle update proxies
 func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]provider.ProxyProvider) {
 	configMux.Lock()
+	old := proxies
 	proxies = newProxies
 	providers = newProviders
 	configMux.Unlock()
+
+	// Close old adapters that are removed or replaced
+	for name, oldProxy := range old {
+		// extract underlying adapter.Proxy to access ProxyAdapter
+		oldWrapped, ok := oldProxy.(*adapter.Proxy)
+		if !ok {
+			continue
+		}
+		oldAdapter := oldWrapped.ProxyAdapter
+
+		newProxy, exist := newProxies[name]
+		if exist {
+			newWrapped, ok := newProxy.(*adapter.Proxy)
+			if ok {
+				newAdapter := newWrapped.ProxyAdapter
+				// try to detect if it's the same adapter instance
+				if reflect.TypeOf(oldAdapter) == reflect.TypeOf(newAdapter) {
+					// if both are pointers, compare addresses
+					vo := reflect.ValueOf(oldAdapter)
+					vn := reflect.ValueOf(newAdapter)
+					if vo.Kind() == reflect.Ptr && vn.Kind() == reflect.Ptr && vo.Pointer() == vn.Pointer() {
+						// same instance, skip closing
+						continue
+					}
+				}
+			}
+		}
+
+		if closer, ok := oldAdapter.(io.Closer); ok {
+			// close either synchronously or asynchronously depending on flag
+			closeFn := func() {
+				if err := closer.Close(); err != nil {
+					log.Warnln("Close old proxy %s error: %v", name, err)
+				} else {
+					log.Infoln("Closed old proxy %s", name)
+				}
+			}
+
+			if CloseOnReplaceSync {
+				closeFn()
+			} else {
+				go closeFn()
+			}
+		}
+	}
 }
 
 // Mode return current mode

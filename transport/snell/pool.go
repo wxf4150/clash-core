@@ -82,3 +82,11 @@ func NewPool(factory func(context.Context) (*Snell, error)) *Pool {
 
 	return &Pool{p}
 }
+
+// Close forces eviction (and Close) of all pooled connections immediately.
+func (p *Pool) Close() {
+	if p == nil || p.pool == nil {
+		return
+	}
+	p.pool.EvictAll()
+}

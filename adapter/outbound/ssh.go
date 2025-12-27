@@ -663,3 +663,23 @@ func dialThroughJumps(
 	// 返回最终 client 和首跳的底层 TCP 连接（用于后续关闭）
 	return client, firstConn, nil
 }
+
+// Close gracefully shuts down the multiplexed SSH client and underlying connection.
+func (ss *Ssh) Close() error {
+	ss.clientMu.Lock()
+	defer ss.clientMu.Unlock()
+	var firstErr error
+	if ss.client != nil {
+		if err := ss.client.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		ss.client = nil
+	}
+	if ss.underConn != nil {
+		if err := ss.underConn.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		ss.underConn = nil
+	}
+	return firstErr
+}

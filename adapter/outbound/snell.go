@@ -162,3 +162,15 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	}
 	return s, nil
 }
+
+// Close closes internal pool resources (if any)
+func (s *Snell) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.pool != nil {
+		s.pool.Close()
+		s.pool = nil
+	}
+	return nil
+}

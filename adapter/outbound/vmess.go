@@ -335,6 +335,23 @@ func NewVmess(option VmessOption) (*Vmess, error) {
 	return v, nil
 }
 
+// Close releases long-lived resources used by Vmess (like http2 transports)
+func (v *Vmess) Close() error {
+	var firstErr error
+	if v == nil {
+		return nil
+	}
+	if v.transport != nil {
+		// http2.Transport exposes CloseIdleConnections
+		v.transport.CloseIdleConnections()
+		v.transport = nil
+	}
+	// gun transport uses http2.Transport as well; gun connections will be closed when transport is idle-closed
+	v.gunConfig = nil
+	v.gunTLSConfig = nil
+	return firstErr
+}
+
 func parseVmessAddr(metadata *C.Metadata) *vmess.DstAddr {
 	var addrType byte
 	var addr []byte

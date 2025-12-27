@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/Dreamacro/clash/tunnel"
 	"io"
 	"net/http"
 	"os"
@@ -219,6 +220,12 @@ func sendSignalToRunningInstance(sig syscall.Signal, actionName string) error {
 	return nil
 }
 
+// The following helpers are platform-specific and implemented in separate files:
+//   - signals_unix.go (non-Windows)
+//   - signals_windows.go (Windows)
+// They provide: hasReloadSignal, hasRestartSignal, getReloadSignal, getRestartSignal,
+// reloadNotifySignals, restartNotifySignals
+
 func main() {
 	maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
 	if version {
@@ -241,21 +248,51 @@ func main() {
 
 	// Handle reload flag
 	if reloadFlag {
-		if err := sendSignalToRunningInstance(syscall.SIGHUP, "reload"); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to send reload signal: %v\n", err)
+		if runtime.GOOS == "windows" {
+			// On Windows, send a HTTP request to local controller instead of using signals
+			if err := sendReloadToController(externalController, secret); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to send reload via controller: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Reload request sent to controller successfully")
+			return
+		}
+
+		if hasReloadSignal() {
+			if err := sendSignalToRunningInstance(getReloadSignal(), "reload"); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to send reload signal: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Reload signal sent successfully")
+		} else {
+			fmt.Fprintln(os.Stderr, "Reload signal unsupported on this platform; use the /configs/reload API or restart manually")
 			os.Exit(1)
 		}
-		fmt.Println("Reload signal sent successfully")
 		return
 	}
 
 	// Handle restart flag
 	if restartFlag {
-		if err := sendSignalToRunningInstance(syscall.SIGUSR1, "restart"); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+		if runtime.GOOS == "windows" {
+			// On Windows, send a HTTP request to local controller instead of using signals
+			if err := sendRestartToController(externalController, secret); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to send restart via controller: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Restart request sent to controller successfully")
+			return
+		}
+
+		if hasRestartSignal() {
+			if err := sendSignalToRunningInstance(getRestartSignal(), "restart"); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Restart signal sent successfully")
+		} else {
+			fmt.Fprintln(os.Stderr, "Restart signal unsupported on this platform; use the /configs/restart API or restart manually")
 			os.Exit(1)
 		}
-		fmt.Println("Restart signal sent successfully")
 		return
 	}
 
@@ -324,8 +361,14 @@ func main() {
 	hupCh := make(chan os.Signal, 1)
 	usr1Ch := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	signal.Notify(hupCh, syscall.SIGHUP)
-	signal.Notify(usr1Ch, syscall.SIGUSR1)
+
+	// Register platform-supported reload/restart signals for notification
+	if s := reloadNotifySignals(); len(s) > 0 {
+		signal.Notify(hupCh, s...)
+	}
+	if s := restartNotifySignals(); len(s) > 0 {
+		signal.Notify(usr1Ch, s...)
+	}
 
 	for {
 		select {
@@ -334,7 +377,11 @@ func main() {
 			if cfg, err := executor.Parse(); err != nil {
 				log.Errorln("Failed to reload configuration:", err.Error())
 			} else {
+				// make proxy replacement close synchronously for reload to ensure old resources are released
+				tunnel.SetCloseOnReplaceSync(true)
 				executor.ApplyConfig(cfg, false)
+				// revert to async close for subsequent updates
+				tunnel.SetCloseOnReplaceSync(false)
 				log.Infoln("Configuration reloaded successfully")
 			}
 		case <-usr1Ch:

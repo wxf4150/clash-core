@@ -3,7 +3,6 @@ package route
 import (
 	"net/http"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/Dreamacro/clash/component/resolver"
@@ -151,8 +150,5 @@ func restartApp(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, render.M{"message": "restarting"})
 
 	// Give time for response to be sent
-	go func() {
-		time.Sleep(restartDelay)
-		syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
-	}()
+	go triggerRestart()
 }

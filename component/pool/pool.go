@@ -112,3 +112,22 @@ func New(factory Factory, options ...Option) *Pool {
 	runtime.SetFinalizer(P, recycle)
 	return P
 }
+
+// EvictAll drains current pooled items and calls evict on each element's value.
+// This does not close the pool for future Put calls, it only forces immediate eviction
+// of items that are currently stored in the pool channel.
+func (P *Pool) EvictAll() {
+	if P == nil || P.pool == nil {
+		return
+	}
+	for {
+		select {
+		case item := <-P.pool.ch:
+			if P.pool.evict != nil {
+				P.pool.evict(item.(*entry).elm)
+			}
+		default:
+			return
+		}
+	}
+}
