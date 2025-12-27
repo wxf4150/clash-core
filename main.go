@@ -177,7 +177,7 @@ func getPIDFile() string {
 func writePIDFile() error {
 	pidFile := getPIDFile()
 	pid := os.Getpid()
-	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0644)
+	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600)
 }
 
 func readPIDFile() (int, error) {
@@ -229,7 +229,11 @@ func main() {
 	// Set home directory first so PID file path is correct
 	if homeDir != "" {
 		if !filepath.IsAbs(homeDir) {
-			currentDir, _ := os.Getwd()
+			currentDir, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get current directory: %v\n", err)
+				os.Exit(1)
+			}
 			homeDir = filepath.Join(currentDir, homeDir)
 		}
 		C.SetHomeDir(homeDir)
