@@ -245,7 +245,7 @@ func main() {
 		case <-hupCh:
 			log.Infoln("Received SIGHUP signal, reloading configuration...")
 			if cfg, err := executor.Parse(); err != nil {
-				log.Errorln("Failed to reload configuration: %s", err.Error())
+				log.Errorln("Failed to reload configuration:", err.Error())
 			} else {
 				executor.ApplyConfig(cfg, false)
 				log.Infoln("Configuration reloaded successfully")

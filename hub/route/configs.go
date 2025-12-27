@@ -149,7 +149,7 @@ func reloadConfigs(w http.ResponseWriter, r *http.Request) {
 
 func restartApp(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, render.M{"message": "restarting"})
-	
+
 	// Give time for response to be sent
 	go func() {
 		time.Sleep(restartDelay)
