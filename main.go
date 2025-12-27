@@ -245,6 +245,32 @@ func main() {
 		}
 		C.SetHomeDir(homeDir)
 	}
+	if configFile != "" {
+		if !filepath.IsAbs(configFile) {
+			currentDir, _ := os.Getwd()
+			configFile = filepath.Join(currentDir, configFile)
+		}
+		C.SetConfig(configFile)
+	} else {
+		configFile := filepath.Join(C.Path.HomeDir(), C.Path.Config())
+		C.SetConfig(configFile)
+	}
+
+	if err := config.Init(C.Path.HomeDir()); err != nil {
+		log.Fatalln("Initial configuration directory error: %s", err.Error())
+	}
+
+	if testConfig || reloadFlag || restartFlag {
+		if _, err := executor.Parse(); err != nil {
+			log.Errorln(err.Error())
+			fmt.Printf("configuration file %s test failed\n", C.Path.Config())
+			os.Exit(1)
+		}
+		fmt.Printf("configuration file %s test is successful\n", C.Path.Config())
+	}
+	if testConfig {
+		return
+	}
 
 	// Handle reload flag
 	if reloadFlag {
@@ -280,44 +306,28 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Println("Restart request sent to controller successfully")
-			return
-		}
-
-		if hasRestartSignal() {
-			if err := sendSignalToRunningInstance(getRestartSignal(), "restart"); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+		} else {
+			if hasRestartSignal() {
+				if err := sendSignalToRunningInstance(getRestartSignal(), "restart"); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Println("Restart signal sent successfully")
+			} else {
+				fmt.Println(os.Stderr, "Restart signal unsupported on this platform; use the /configs/restart API or restart manually")
 				os.Exit(1)
 			}
-			fmt.Println("Restart signal sent successfully")
+		}
+
+		// Spawn a new background daemon after a short delay to allow the current
+		time.Sleep(1500 * time.Millisecond)
+		logPath := filepath.Join(os.TempDir(), "clash.log")
+		fmt.Fprintln(os.Stderr, "Spawning background daemon, stdout/stderr -> %s", logPath)
+		if err := spawnDaemon(); err != nil {
+			log.Errorln("Failed to spawn daemon:", err.Error())
 		} else {
-			fmt.Fprintln(os.Stderr, "Restart signal unsupported on this platform; use the /configs/restart API or restart manually")
-			os.Exit(1)
+			fmt.Println("Spawned new daemon successfully")
 		}
-		return
-	}
-
-	if configFile != "" {
-		if !filepath.IsAbs(configFile) {
-			currentDir, _ := os.Getwd()
-			configFile = filepath.Join(currentDir, configFile)
-		}
-		C.SetConfig(configFile)
-	} else {
-		configFile := filepath.Join(C.Path.HomeDir(), C.Path.Config())
-		C.SetConfig(configFile)
-	}
-
-	if err := config.Init(C.Path.HomeDir()); err != nil {
-		log.Fatalln("Initial configuration directory error: %s", err.Error())
-	}
-
-	if testConfig {
-		if _, err := executor.Parse(); err != nil {
-			log.Errorln(err.Error())
-			fmt.Printf("configuration file %s test failed\n", C.Path.Config())
-			os.Exit(1)
-		}
-		fmt.Printf("configuration file %s test is successful\n", C.Path.Config())
 		return
 	}
 

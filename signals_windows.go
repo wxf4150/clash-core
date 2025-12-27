@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -100,4 +102,36 @@ func sendRestartToController(controller, secret string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 	return nil
+}
+
+// spawnDaemon (Windows) — 使用 CreationFlags 脱离父进程，并把输出写到 clash.log
+func spawnDaemon() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(exe)
+
+	logPath := filepath.Join(os.TempDir(), "clash.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+
+	cmd.Stdin = nil
+	cmd.Stdout = f
+	cmd.Stderr = f
+
+	const detached = 0x00000008
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | detached,
+	}
+
+	if err := cmd.Start(); err != nil {
+		f.Close()
+		return err
+	}
+
+	return f.Close()
 }
