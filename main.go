@@ -33,6 +33,9 @@ var (
 	// mmdb download flags
 	downloadMMDBFlag bool
 	mmdbURL          string
+	// control flags
+	reloadFlag  bool
+	restartFlag bool
 )
 
 func init() {
@@ -46,6 +49,9 @@ func init() {
 	// mmdb download flags
 	flag.BoolVar(&downloadMMDBFlag, "download-mmdb", false, "download mmdb and exit")
 	flag.StringVar(&mmdbURL, "mmdb-url", "", "mmdb download url override")
+	// control flags
+	flag.BoolVar(&reloadFlag, "reload", false, "send reload signal to running clash instance")
+	flag.BoolVar(&restartFlag, "restart", false, "send restart signal to running clash instance")
 	flag.Parse()
 
 	flagset = map[string]bool{}
@@ -164,6 +170,55 @@ func humanizeBytes(b int64) string {
 	return fmt.Sprintf("%.2f %s", d, suffix[exp])
 }
 
+func getPIDFile() string {
+	return filepath.Join(C.Path.HomeDir(), "clash.pid")
+}
+
+func writePIDFile() error {
+	pidFile := getPIDFile()
+	pid := os.Getpid()
+	return os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0600)
+}
+
+func readPIDFile() (int, error) {
+	pidFile := getPIDFile()
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	_, err = fmt.Sscanf(string(data), "%d", &pid)
+	return pid, err
+}
+
+func removePIDFile() {
+	pidFile := getPIDFile()
+	os.Remove(pidFile)
+}
+
+func sendSignalToPID(pid int, sig syscall.Signal) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %w", err)
+	}
+	// Try to send signal 0 first to check if process exists
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return fmt.Errorf("process %d does not exist or is not accessible", pid)
+	}
+	return process.Signal(sig)
+}
+
+func sendSignalToRunningInstance(sig syscall.Signal, actionName string) error {
+	pid, err := readPIDFile()
+	if err != nil {
+		return fmt.Errorf("failed to read PID file: %w", err)
+	}
+	if err := sendSignalToPID(pid, sig); err != nil {
+		return fmt.Errorf("failed to send %s signal to process %d: %w", actionName, pid, err)
+	}
+	return nil
+}
+
 func main() {
 	maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
 	if version {
@@ -171,12 +226,37 @@ func main() {
 		return
 	}
 
+	// Set home directory first so PID file path is correct
 	if homeDir != "" {
 		if !filepath.IsAbs(homeDir) {
-			currentDir, _ := os.Getwd()
+			currentDir, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to get current directory: %v\n", err)
+				os.Exit(1)
+			}
 			homeDir = filepath.Join(currentDir, homeDir)
 		}
 		C.SetHomeDir(homeDir)
+	}
+
+	// Handle reload flag
+	if reloadFlag {
+		if err := sendSignalToRunningInstance(syscall.SIGHUP, "reload"); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send reload signal: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Reload signal sent successfully")
+		return
+	}
+
+	// Handle restart flag
+	if restartFlag {
+		if err := sendSignalToRunningInstance(syscall.SIGUSR1, "restart"); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send restart signal: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Restart signal sent successfully")
+		return
 	}
 
 	if configFile != "" {
@@ -233,7 +313,40 @@ func main() {
 		return
 	}
 
+	// Write PID file for the running instance
+	if err := writePIDFile(); err != nil {
+		log.Warnln("Failed to write PID file:", err.Error())
+	} else {
+		defer removePIDFile()
+	}
+
 	sigCh := make(chan os.Signal, 1)
+	hupCh := make(chan os.Signal, 1)
+	usr1Ch := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	signal.Notify(hupCh, syscall.SIGHUP)
+	signal.Notify(usr1Ch, syscall.SIGUSR1)
+
+	for {
+		select {
+		case <-hupCh:
+			log.Infoln("Received SIGHUP signal, reloading configuration...")
+			if cfg, err := executor.Parse(); err != nil {
+				log.Errorln("Failed to reload configuration:", err.Error())
+			} else {
+				executor.ApplyConfig(cfg, false)
+				log.Infoln("Configuration reloaded successfully")
+			}
+		case <-usr1Ch:
+			log.Infoln("Received SIGUSR1 signal, restarting application...")
+			// To restart, we need to re-execute the process
+			// This is a simple approach - stop and let the process manager restart us
+			// For a proper restart, external process managers (systemd, docker, etc.) should be used
+			log.Infoln("Application restart requested. Exiting for process manager to restart...")
+			os.Exit(0)
+		case <-sigCh:
+			log.Infoln("Shutting down...")
+			return
+		}
+	}
 }

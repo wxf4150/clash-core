@@ -3,6 +3,8 @@ package route
 import (
 	"net/http"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/Dreamacro/clash/component/resolver"
 	"github.com/Dreamacro/clash/config"
@@ -17,11 +19,19 @@ import (
 	"github.com/samber/lo"
 )
 
+const (
+	// restartDelay is the time to wait before sending restart signal
+	// to allow HTTP response to be sent to client
+	restartDelay = 100 * time.Millisecond
+)
+
 func configRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", getConfigs)
 	r.Put("/", updateConfigs)
 	r.Patch("/", patchConfigs)
+	r.Post("/reload", reloadConfigs)
+	r.Post("/restart", restartApp)
 	return r
 }
 
@@ -123,4 +133,26 @@ func updateConfigs(w http.ResponseWriter, r *http.Request) {
 
 	executor.ApplyConfig(cfg, force)
 	render.NoContent(w, r)
+}
+
+func reloadConfigs(w http.ResponseWriter, r *http.Request) {
+	cfg, err := executor.Parse()
+	if err != nil {
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
+
+	executor.ApplyConfig(cfg, false)
+	render.NoContent(w, r)
+}
+
+func restartApp(w http.ResponseWriter, r *http.Request) {
+	render.JSON(w, r, render.M{"message": "restarting"})
+
+	// Give time for response to be sent
+	go func() {
+		time.Sleep(restartDelay)
+		syscall.Kill(syscall.Getpid(), syscall.SIGUSR1)
+	}()
 }

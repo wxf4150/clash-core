@@ -11,6 +11,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.0.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/insomniacslk/dhcp v0.0.0-20230816195147-b3ca2534940d
+	github.com/kevinburke/ssh_config v1.4.0
 	github.com/mdlayher/netlink v1.7.2
 	github.com/miekg/dns v1.1.55
 	github.com/oschwald/geoip2-golang v1.9.0
@@ -33,7 +34,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/josharian/native v1.1.0 // indirect
-	github.com/kevinburke/ssh_config v1.4.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mdlayher/socket v0.4.1 // indirect
 	github.com/oschwald/maxminddb-golang v1.11.0 // indirect
